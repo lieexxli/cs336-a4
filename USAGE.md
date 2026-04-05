@@ -91,6 +91,22 @@
 
 如果你只做到 `data/tokens.bin`，就不需要专门配 GPU。
 
+### 1.4 如果只考虑训练环节，硬件要求会低很多
+
+前面那套 `48-64` 核、`128-256GB` 内存、`2-4TB` NVMe，主要是给**全量数据处理 pipeline**准备的，尤其是 Step 3 精确去重。
+
+如果你已经有了训练数据，只考虑训练本身：
+
+| 训练内容 | CPU | 内存 | 磁盘 | GPU | 备注 |
+|---|---:|---:|---:|---:|---|
+| 训练测试分类器 A / Leaderboard 分类器 B | 8-16 核 | 16-32 GB | 20-50 GB | 不需要 | fastText 训练主要吃 CPU |
+| 只训练最终语言模型，且 `tokens.bin` 已就绪 | 8-16 核 | 32-64 GB | 50-100 GB NVMe | `2 x 40GB+` 更稳 | GPU 是核心瓶颈 |
+
+更准确地说：
+
+- **全量数据准备**：吃 CPU / RAM / NVMe
+- **模型训练**：主要吃 GPU；CPU、内存、硬盘要求反而没那么夸张
+
 ---
 
 ## 2. 通用准备
@@ -190,16 +206,8 @@ ln -sf ../paloma/tokenized_paloma_c4_100_domains_validation.bin \
   data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin
 ```
 
-如果你沿用 `cs336-basics` 配置里写死的 `/data/paloma/...`，再二选一：
-
-```bash
-# 方案 A：额外做一个全局兼容软链
-sudo mkdir -p /data/paloma
-sudo ln -sf /content/cs336-a4/data/paloma/tokenized_paloma_c4_100_domains_validation.bin \
-  /data/paloma/tokenized_paloma_c4_100_domains_validation.bin
-
-# 方案 B：直接改训练配置里的 valid_bin 路径
-```
+仓库里的 `cs336-basics/configs/experiment/*.yaml` 现在已经默认指向项目内路径
+`data/paloma/tokenized_paloma_c4_100_domains_validation.bin`，不需要再手动做 `/data/paloma` 软链。
 
 ---
 
@@ -638,6 +646,7 @@ sbatch cs336_data/leaderboard/train.sh
 ### 本地多卡
 
 ```bash
+cd cs336-basics
 uv run torchrun --standalone --nproc_per_node=2 \
   scripts/train.py \
   --config-name=experiment/bucketed.yaml

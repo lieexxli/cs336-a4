@@ -4,8 +4,8 @@ paths:
   # Set to your data, tokenized with GPT-2 tokenizer!
   train_bin: /data/c-sniderb/a4-leaderboard/tokenized-bucketed.bin
   
-  # The validation set which we have already tokenized with GPT-2 tokenizer, don't change this!
-  valid_bin: /data/paloma/tokenized_paloma_c4_100_domains_validation.bin
+  # The validation set which we have already tokenized with GPT-2 tokenizer.
+  valid_bin: data/paloma/tokenized_paloma_c4_100_domains_validation.bin
   
   model_output: output/bucketed
 

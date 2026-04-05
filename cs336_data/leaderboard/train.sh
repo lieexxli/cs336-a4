@@ -7,6 +7,8 @@
 #SBATCH --output=train_model_%j.out
 #SBATCH --error=train_model_%j.err
 
+cd cs336-basics
+
 uv run torchrun --standalone --nproc_per_node=2 \
     scripts/train.py \
     --config-name=experiment/bucketed.yaml
