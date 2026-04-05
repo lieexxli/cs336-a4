@@ -9,9 +9,10 @@
 
 这份文档按这个顺序组织：
 
-1. 先看“全量所需硬件配置”，判断本机是否适合全量
-2. 做一次“通用准备”
-3. 然后二选一：
+1. 先看“整体结构”，知道代码、数据、模型分别放在哪里
+2. 再看“全量所需硬件配置”，判断本机是否适合全量
+3. 做一次“通用准备”
+4. 然后二选一：
    - 只想验证流程：走“小样本跑通”
    - 想直接完整复现：直接走“全量复现”
 
@@ -19,7 +20,76 @@
 
 ---
 
-## 1. 全量所需硬件配置
+## 1. 先看整体结构
+
+### 1.1 你最后会得到什么
+
+如果只做到“语言模型训练之前”为止，核心产物有 3 类：
+
+| 产物 | 路径 | 作用 |
+|---|---|---|
+| 测试质量分类器 A | `out/models/quality.bin` | 作业里的测试/辅助分类器，不参与最终主 pipeline |
+| Leaderboard 质量分类器 B | `data/leaderboard/classifier/quality.bin` | Step 4 实际使用的分类器 |
+| 训练用 token 数据 | `data/tokens.bin` | 最终语言模型训练输入 |
+
+### 1.2 仓库结构与作用
+
+下面这个结构只保留复现时最重要的目录：
+
+```text
+cs336-a4/
+├── cs336_data/                       # 本作业自己的数据处理代码
+│   ├── extract_text.py               # HTML -> 纯文本
+│   ├── language_identification.py    # 语种识别
+│   ├── harmful_content.py            # NSFW / 毒性分类
+│   ├── gopher_quality_filters.py     # Gopher 规则过滤
+│   ├── exact_deduplication.py        # Step 3 精确去重
+│   ├── quality_classifier/           # 测试质量分类器 A 的训练与推理
+│   └── leaderboard/                  # 主 pipeline（Step 1-5）与分类器 B
+├── cs336-basics/                     # 最终语言模型训练代码
+│   ├── configs/experiment/           # 训练配置
+│   └── scripts/train.py              # 语言模型训练入口
+├── tests/                            # 单元测试与夹具
+├── data/                             # 本地数据与中间产物（不提交）
+│   ├── classifiers/                  # 外部下载的 fastText 模型
+│   ├── wiki/                         # Wikipedia 相关原始数据与 A 的训练集
+│   ├── CC/                           # WARC（给测试分类器 A 做负例）
+│   ├── raw/                          # WET 原始输入（给主 pipeline）
+│   ├── 01-english/                   # Step 1 输出
+│   ├── 02-heuristics/                # Step 2 输出
+│   ├── 03-deduped/                   # Step 3 输出
+│   ├── 04-classified/                # Step 4 输出
+│   ├── paloma/                       # Paloma validation.bin
+│   └── leaderboard/classifier/       # 分类器 B 的训练数据与模型
+├── out/models/                       # 测试分类器 A 的模型输出
+└── USAGE.md                          # 本文档
+```
+
+### 1.3 代码、数据、模型分别是什么
+
+| 类别 | 典型位置 | 作用 |
+|---|---|---|
+| 代码 | `cs336_data/`, `cs336-basics/` | 真正执行过滤、采样、训练 |
+| 原始外部数据 | `data/raw`, `data/CC`, `data/paloma`, `data/wiki` | 从 Common Crawl / Wikipedia / Paloma 下载或构建 |
+| 中间产物 | `data/01-english` ~ `data/04-classified` | 主 pipeline 每一步的输出 |
+| 模型文件 | `data/classifiers/*.bin`, `out/models/quality.bin`, `data/leaderboard/classifier/quality.bin` | 外部分类器或本地训练出的 fastText 模型 |
+| 最终训练输入 | `data/tokens.bin` | 给语言模型训练脚本使用的 tokenized 数据 |
+
+### 1.4 人类和 AI 都该遵守的执行约定
+
+为避免复现中途跑偏，建议统一按下面规则执行：
+
+1. 默认所有命令都在仓库根目录运行，只有最终 LLM 训练时才显式 `cd cs336-basics`。
+2. “小样本跑通”与“全量复现”是两条路线；不要把小样本中间结果误当成全量结果。
+3. `data/`、`out/models/`、下载的 `.bin/.gz` 都是本地产物，不应提交到 Git。
+4. 如果目标只是“做到 `data/tokens.bin` 为止”，执行到 Step 5 就停止，不要继续跑 LLM 训练。
+5. 重新开始全量时，可以复用环境、外部模型、Wikipedia URL 列表和 Paloma `.bin`，但应重做基于 Common Crawl 的中间结果。
+6. 本文统一使用仓库内相对路径，如 `data/...`，不再额外介绍集群专用路径。
+7. 每完成一个小节，先检查该节列出的“关键产物”是否已经生成，再进入下一节。
+
+---
+
+## 2. 全量所需硬件配置
 
 如果你的目标是“做到 `data/tokens.bin` 为止，不做最后语言模型训练”，那么：
 
@@ -35,7 +105,7 @@
 | 全量训练前 pipeline 推荐单机 | 48-64 核 | 256 GB | 4 TB NVMe | 不需要 | 更稳妥，适合保留更多中间产物 |
 | 如果连最后 LM 训练也要做 | 48-64 核 | 256 GB | 4 TB NVMe | `2 x 40GB+` | 更接近默认训练脚本配置 |
 
-### 1.1 为什么全量主要吃 CPU / RAM / SSD
+### 2.1 为什么全量主要吃 CPU / RAM / SSD
 
 - Step 1 语种过滤、Step 2 启发式过滤、Step 4 分类器过滤、Step 5 tokenize，基本都是 CPU 任务。
 - 两个 fastText 质量分类器训练也主要吃 CPU，不依赖 GPU。
@@ -44,7 +114,7 @@
   - 这一步对 **内存** 最敏感
   - 也是全链路最不适合小内存机器的一步
 
-### 1.2 磁盘为什么要至少 2 TB，推荐 4 TB
+### 2.2 磁盘为什么要至少 2 TB，推荐 4 TB
 
 按文档默认“5,000 个 WET 文件”的量级，经验上：
 
@@ -72,7 +142,7 @@
 
 不建议用机械硬盘做这套流程的主存储。
 
-### 1.3 如果以后还想做最终 LM 训练
+### 2.3 如果以后还想做最终 LM 训练
 
 这一步不属于本文核心，但为了避免低估资源，这里单独说明。
 
@@ -91,7 +161,7 @@
 
 如果你只做到 `data/tokens.bin`，就不需要专门配 GPU。
 
-### 1.4 如果只考虑训练环节，硬件要求会低很多
+### 2.4 如果只考虑训练环节，硬件要求会低很多
 
 前面那套 `48-64` 核、`128-256GB` 内存、`2-4TB` NVMe，主要是给**全量数据处理 pipeline**准备的，尤其是 Step 3 精确去重。
 
@@ -109,15 +179,15 @@
 
 ---
 
-## 2. 通用准备
+## 3. 通用准备
 
-### 2.1 安装依赖
+### 3.1 安装依赖
 
 ```bash
 uv sync
 ```
 
-### 2.2 下载 NLTK 分词数据
+### 3.2 下载 NLTK 分词数据
 
 ```bash
 uv run python - <<'PY'
@@ -126,7 +196,7 @@ nltk.download("punkt_tab")
 PY
 ```
 
-### 2.3 创建目录
+### 3.3 创建目录
 
 ```bash
 mkdir -p \
@@ -141,15 +211,9 @@ mkdir -p \
   out/models
 ```
 
-### 2.4 下载外部分类器模型
+### 3.4 下载外部分类器模型
 
-代码会优先查找：
-
-1. `/data/classifiers/`
-2. `data/classifiers/`
-3. `../classifiers/`
-
-个人服务器推荐直接放在 `data/classifiers/`。
+本文统一把外部分类器模型放在 `data/classifiers/`。
 
 ```bash
 wget -O data/classifiers/dolma_fasttext_nsfw_jigsaw_model.bin \
@@ -162,7 +226,7 @@ wget -O data/classifiers/lid.176.bin \
   "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin"
 ```
 
-### 2.5 准备 Wikipedia 标题与 URL 列表
+### 3.5 准备 Wikipedia 标题与 URL 列表
 
 ```bash
 wget -O data/wiki/titles.gz \
@@ -174,7 +238,7 @@ zcat data/wiki/titles.gz \
   | gzip > data/wiki/enwiki-20240420-extracted_urls.txt.gz
 ```
 
-### 2.6 构建 Paloma `c4_100_domains` 验证集 `.bin`
+### 3.6 构建 Paloma `c4_100_domains` 验证集 `.bin`
 
 访问 Paloma 前，先确保你已经登录 Hugging Face 并同意该数据集的访问协议。
 
@@ -207,13 +271,13 @@ ln -sf ../paloma/tokenized_paloma_c4_100_domains_validation.bin \
 ```
 
 仓库里的 `cs336-basics/configs/experiment/*.yaml` 现在已经默认指向项目内路径
-`data/paloma/tokenized_paloma_c4_100_domains_validation.bin`，不需要再手动做 `/data/paloma` 软链。
+`data/paloma/tokenized_paloma_c4_100_domains_validation.bin`。
 
 ---
 
-## 3. 版本 A：小样本跑通
+## 4. 版本 A：小样本跑通
 
-### 3.1 目标
+### 4.1 目标
 
 这条路线的目标是：
 
@@ -224,7 +288,7 @@ ln -sf ../paloma/tokenized_paloma_c4_100_domains_validation.bin \
 
 建议磁盘预留：`5G` 到 `10G`
 
-### 3.2 下载少量 Common Crawl 样本
+### 4.2 下载少量 Common Crawl 样本
 
 #### 下载 1 个 WARC 给测试分类器 A 做负例
 
@@ -248,7 +312,7 @@ zcat data/commoncrawl/wet.paths.gz | head -2 | while read -r wet_path; do
 done
 ```
 
-### 3.3 训练测试质量分类器 A
+### 4.3 训练测试质量分类器 A
 
 这套分类器只用于测试和作业要求，本身不参与最终 Leaderboard 主 pipeline。
 
@@ -323,7 +387,7 @@ uv run python cs336_data/quality_classifier/07-train.py
 
 如果你不是为了作业测试，而只是想跑通主 pipeline，这一节可以跳过。
 
-### 3.4 运行 Leaderboard Step 1 到 Step 3
+### 4.4 运行 Leaderboard Step 1 到 Step 3
 
 ```bash
 # Step 1: 语种过滤
@@ -352,7 +416,7 @@ uv run python cs336_data/leaderboard/03-exact_dedupe.py \
 - `data/02-heuristics`
 - `data/03-deduped`
 
-### 3.5 训练 Leaderboard 质量分类器 B
+### 4.5 训练 Leaderboard 质量分类器 B
 
 这是 Step 4 真正使用的分类器，和测试分类器 A 完全独立。
 
@@ -389,7 +453,7 @@ uv run python cs336_data/leaderboard/classifier/05-train.py
 - `data/leaderboard/classifier/quality.valid`
 - `data/leaderboard/classifier/quality.bin`
 
-### 3.6 运行 Leaderboard Step 4 到 Step 5
+### 4.6 运行 Leaderboard Step 4 到 Step 5
 
 ```bash
 # Step 4: 用分类器 B 过滤
@@ -413,19 +477,27 @@ uv run python cs336_data/leaderboard/05-tokenize.py \
 `05-tokenize.py` 可能会打印 GPT-2 的“长度超过 1024”提示。  
 这里只是在做 tokenizer 编码并写 `.bin`，这条提示不影响该步骤完成。
 
+#### 小样本路线完成判定
+
+当下面 3 个文件都存在时，可以认为“小样本路线已经跑通”：
+
+- `out/models/quality.bin`
+- `data/leaderboard/classifier/quality.bin`
+- `data/tokens.bin`
+
 ---
 
-## 4. 版本 B：全量复现
+## 5. 版本 B：全量复现
 
-### 4.1 适用范围
+### 5.1 适用范围
 
 这一节是**独立版全量流程**。
 
-- 只依赖上面的“通用准备”（§ 2）
-- **不依赖**先跑“小样本跑通”（§ 3）
+- 只依赖上面的“通用准备”（§ 3）
+- **不依赖**先跑“小样本跑通”（§ 4）
 - 如果你想直接从零做全量，可以直接从这里开始
 
-### 4.2 下载全量所需原始数据
+### 5.2 下载全量所需原始数据
 
 #### 下载 1 个 WARC 供测试分类器 A 使用
 
@@ -460,7 +532,7 @@ zcat data/commoncrawl/wet.paths.gz | head -n "${N}" | while read -r wet_path; do
 done
 ```
 
-### 4.3 从零训练测试质量分类器 A
+### 5.3 从零训练测试质量分类器 A
 
 这套分类器不参与最终主 pipeline，但如果你想把“语言模型训练之前的所有步骤”都做全，这一节也应完成。
 
@@ -508,12 +580,9 @@ uv run python cs336_data/quality_classifier/07-train.py
 - `data/wiki/quality.valid`
 - `out/models/quality.bin`
 
-### 4.4 全量运行 Leaderboard Step 1 到 Step 3
+### 5.4 全量运行 Leaderboard Step 1 到 Step 3
 
-如果你在有 SLURM 的集群上跑，可以直接不加 `--single` / `--mp`，脚本会走 submitit。  
-如果你是在本地单机上跑，推荐显式加 `--mp`。
-
-#### 本地多进程版本
+本地单机推荐显式加 `--mp`：
 
 ```bash
 uv run python cs336_data/leaderboard/01-language.py \
@@ -531,29 +600,13 @@ uv run python cs336_data/leaderboard/03-exact_dedupe.py \
   --outdir data/03-deduped
 ```
 
-#### 集群默认版本
-
-```bash
-uv run python cs336_data/leaderboard/01-language.py \
-  --data-dir /data/CC \
-  --out-dir /data/output/01-english
-
-uv run python cs336_data/leaderboard/02-heuristics.py \
-  --data-dir /data/output/01-english \
-  --out-dir /data/output/02-heuristics
-
-uv run python cs336_data/leaderboard/03-exact_dedupe.py \
-  --data-dir /data/output/02-heuristics \
-  --outdir /data/output/03-deduped
-```
-
 关键产物：
 
 - `data/01-english`
 - `data/02-heuristics`
 - `data/03-deduped`
 
-### 4.5 从零训练 Leaderboard 质量分类器 B
+### 5.5 从零训练 Leaderboard 质量分类器 B
 
 这是 Step 4 实际使用的分类器，也是全量版本里必须重新训练的一步。
 
@@ -588,9 +641,9 @@ uv run python cs336_data/leaderboard/classifier/05-train.py
 - `data/leaderboard/classifier/quality.valid`
 - `data/leaderboard/classifier/quality.bin`
 
-### 4.6 全量运行 Leaderboard Step 4 到 Step 5
+### 5.6 全量运行 Leaderboard Step 4 到 Step 5
 
-#### 本地多进程版本
+本地单机推荐显式加 `--mp`：
 
 ```bash
 uv run python cs336_data/leaderboard/04-c4_100_classify.py \
@@ -603,23 +656,24 @@ uv run python cs336_data/leaderboard/05-tokenize.py \
   --output-path data/tokens.bin
 ```
 
-#### 集群默认版本
-
-```bash
-uv run python cs336_data/leaderboard/04-c4_100_classify.py \
-  --data-dir /data/output/03-deduped \
-  --out-dir /data/output/04-classified
-
-uv run python cs336_data/leaderboard/05-tokenize.py \
-  --input-dir /data/output/04-classified \
-  --output-path /data/output/tokens.bin
-```
-
 做到这里，就已经完成了“最终语言模型训练之前”的全部步骤。
+
+#### 全量路线完成判定
+
+当下面这些产物都存在时，可以认为“全量训练前流程已经完成”：
+
+- `data/03-deduped`
+- `data/leaderboard/classifier/quality.bin`
+- `data/04-classified`
+- `data/tokens.bin`
+
+如果你也把测试质量分类器 A 一并做了，那么还应额外看到：
+
+- `out/models/quality.bin`
 
 ---
 
-## 5. 最终产物速查
+## 6. 最终产物速查
 
 | 产物 | 说明 |
 |---|---|
@@ -633,15 +687,9 @@ uv run python cs336_data/leaderboard/05-tokenize.py \
 
 ---
 
-## 6. 如果你还要继续做最终语言模型训练
+## 7. 如果你还要继续做最终语言模型训练
 
 这一步不属于“训练前数据准备”，但命令放在这里方便对照。
-
-### 集群
-
-```bash
-sbatch cs336_data/leaderboard/train.sh
-```
 
 ### 本地多卡
 
@@ -654,7 +702,7 @@ uv run torchrun --standalone --nproc_per_node=2 \
 
 ---
 
-## 7. 测试与提交
+## 8. 测试与提交
 
 ### 运行测试
 
@@ -678,7 +726,7 @@ bash test_and_make_submission.sh
 
 ---
 
-## 8. 如果你先做过小样本，可复用什么
+## 9. 如果你先做过小样本，可复用什么
 
 这一节只是给“先跑过小样本、现在想升级到全量”的读者看的。  
 它不是全量流程的前置条件。
