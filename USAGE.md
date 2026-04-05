@@ -1,630 +1,599 @@
-# CS336 Assignment 4 使用说明
+# CS336 Assignment 4 复现指南
 
-本项目实现了一套用于**过滤和清洗 Common Crawl 数据**的工具链，最终目标是训练高质量的语言模型。
+本仓库的工作流可以分成两条路线：
 
----
+| 路线 | 目标 | 适合场景 | 典型产物 |
+|---|---|---|---|
+| 小样本跑通 | 先验证所有数据处理和分类器训练步骤都能在本地走通 | 本地磁盘有限，先做 smoke test | `out/models/quality.bin`、`data/leaderboard/classifier/quality.bin`、`data/tokens.bin` |
+| 全量复现 | 用更多 Common Crawl 数据重跑正式数据管线 | 准备真正做大规模过滤或最终训练 | 更大的 `data/01-english` ~ `data/04-classified`、正式版 `data/tokens.bin` |
 
-## 目录结构
+这份文档按这个顺序组织：
 
-```
-cs336-a4/
-├── cs336_data/                  # 核心实现模块
-│   ├── extract_text.py          # HTML → 纯文本提取
-│   ├── language_identification.py  # 语种识别（fastText）
-│   ├── mask_pii.py              # PII 脱敏（邮箱/电话/IP）
-│   ├── harmful_content.py       # 有害内容分类（NSFW/毒性）
-│   ├── gopher_quality_filters.py  # Gopher 质量过滤规则
-│   ├── exact_deduplication.py   # 精确去重
-│   ├── minhash_deduplication.py # MinHash 模糊去重
-│   ├── quality_classifier/      # 质量分类器（自训练 fastText）
-│   │   ├── quality_classifier.py   # 推理接口
-│   │   ├── 01~07-*.py           # 训练质量分类器的完整流程
-│   │   └── 07-train.py          # 训练入口
-│   └── leaderboard/             # 完整数据处理 Pipeline
-│       ├── 01-language.py       # Step 1: 语种过滤
-│       ├── 02-heuristics.py     # Step 2: 启发式质量过滤（C4 + Gopher）
-│       ├── 03-exact_dedupe.py   # Step 3: 精确去重
-│       ├── 04-c4_100_classify.py  # Step 4: 质量分类器过滤
-│       ├── 05-tokenize.py       # Step 5: Tokenization
-│       └── train.sh             # SLURM 训练脚本
-├── cs336-basics/                # 助教提供的模型训练代码（勿修改）
-├── tests/                       # 单元测试
-├── pyproject.toml               # 项目依赖
-└── get_assets.sh                # 下载预训练分类器模型
-```
+1. 先做通用准备
+2. 如果只是验证流程，走“小样本跑通”
+3. 如果要升级到更多数据，再走“全量复现”
+
+所有命令默认都在仓库根目录执行：`/content/cs336-a4`
 
 ---
 
-## 环境依赖
+## 1. 小样本产物能否复用到全量
 
-### 系统要求
+| 产物 | 全量时能否直接复用 | 说明 |
+|---|---|---|
+| `uv sync` 安装好的环境 | 可以 | 直接复用 |
+| `nltk` 的 `punkt_tab` | 可以 | 直接复用 |
+| `data/classifiers/*.bin` | 可以 | NSFW、毒性、语种识别模型都可直接复用 |
+| `data/wiki/titles.gz` | 可以 | 只是原始标题 dump |
+| `data/wiki/enwiki-20240420-extracted_urls.txt.gz` | 可以 | 只是 Wikipedia URL 列表 |
+| `data/paloma/tokenized_paloma_c4_100_domains_validation.bin` | 可以 | Leaderboard 分类器正例来源，可直接复用 |
+| `data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin` | 可以 | 只是兼容软链，可直接复用 |
+| `out/models/quality.bin` | 可以，但通常没必要 | 这是测试用质量分类器 A，不参与最终主 pipeline |
+| `data/CC/example.warc.gz` | 可以，但只够小样本 | 负例采样 smoke test 可继续用；不代表全量数据 |
+| `data/raw/*.warc.wet.gz`（你的小样本 WET） | 不可以 | 全量需要重新下载更多 WET |
+| `data/01-english`、`data/02-heuristics`、`data/03-deduped`、`data/04-classified` | 不可以 | 这些都是对小样本 CC 的中间结果，全量必须重跑 |
+| `data/leaderboard/classifier/quality.bin`（小样本训练） | 能临时用，但正式全量建议重训 | 技术上可用于 Step 4，但推荐用更大的 Step 3 输出重新训练 |
+| `data/tokens.bin`（小样本） | 不可以 | 全量必须重新 tokenization |
 
-- Python ≥ 3.11
-- Linux / macOS（`os.sched_getaffinity` 在 Windows 不可用）
-- 建议使用 GPU 进行模型训练
+一句话总结：
 
-### 安装
+- 通用资源、外部模型、Paloma、环境准备都可以复用。
+- 所有基于小样本 Common Crawl 生成的中间产物，都不能当作全量结果。
+- Leaderboard 分类器 B 的小样本模型可以先拿来验证 Step 4 接线，但正式全量建议重训。
 
-本项目使用 `uv` 管理依赖：
+---
+
+## 2. 通用准备
+
+### 2.1 安装依赖
 
 ```bash
-# 安装所有依赖（含 cs336-basics 子模块）
 uv sync
 ```
 
-主要 Python 依赖：
-
-| 包 | 用途 |
-|---|---|
-| `fasttext` | 语种识别 + 质量/NSFW/毒性分类 |
-| `resiliparse` | HTML 解析与文本提取 |
-| `mmh3` | 高速哈希（去重） |
-| `nltk` | 分词（Gopher 过滤器） |
-| `fastwarc` | 读取 WARC/WET 格式文件 |
-| `xopen` | 透明读取压缩文件（.gz） |
-| `transformers` | GPT-2 Tokenizer（Pipeline Step 2/5 及 Leaderboard 分类器） |
-| `torch` | 模型训练 |
-| `wandb` | 训练日志 |
-| `tldextract` | 域名提取（黑名单过滤） |
-
----
-
-## 所需数据与模型文件
-
-> ⚠️ **代码库不含数据或模型权重**，需要单独获取。
-
-### 数据与模型文件完整清单
-
-| # | 文件 / 数据集 | 用途 | 获取方式 |
-|---|---|---|---|
-| 1 | `dolma_fasttext_nsfw_jigsaw_model.bin` | NSFW 分类 | [`bash get_assets.sh`](https://huggingface.co/allenai/dolma-jigsaw-fasttext-bigrams-nsfw) |
-| 2 | `dolma_fasttext_hatespeech_jigsaw_model.bin` | 毒性分类 | [`bash get_assets.sh`](https://huggingface.co/allenai/dolma-jigsaw-fasttext-bigrams-hatespeech) |
-| 3 | `lid.176.bin` | 语种识别 | [`dl.fbaipublicfiles.com/.../lid.176.bin`](https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin)（126 MB） |
-| 4 | `enwiki-20240420-extracted_urls.txt.gz` | 测试用质量分类器正例 | 可由 Wikipedia 标题 dump 快速生成（见下方） |
-| 5 | CC WARC 文件（含 HTML） | 测试用质量分类器负例 | [`data.commoncrawl.org`](https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/warc.paths.gz) |
-| 6 | CC WET 文件（纯文本） | 主过滤 Pipeline 输入 | [`data.commoncrawl.org`](https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/wet.paths.gz) |
-| 7 | **Paloma `c4_100_domains` 验证集** | Leaderboard 分类器正例 + 模型评估 | [huggingface.co/datasets/allenai/paloma](https://huggingface.co/datasets/allenai/paloma)（需登录并同意协议） |
-| 8 | **Leaderboard 分类器** (`classifier/quality.bin`) | Pipeline Step 4 实际分类器 | 需自行训练（见 § 6） |
-
-### 1. 预训练 fastText 分类器（NSFW + 毒性）
-
-代码依次查找以下路径（按优先级）：
-
-1. `/data/classifiers/`（集群共享路径，优先）
-2. `data/classifiers/`（**项目内推荐路径，个人服务器用这个**）
-3. `../classifiers/`（项目根目录上一级，兼容旧路径）
-
-**个人服务器推荐做法**（在项目根目录执行）：
+### 2.2 下载 NLTK 分词数据
 
 ```bash
-mkdir -p data/classifiers
+uv run python - <<'PY'
+import nltk
+nltk.download("punkt_tab")
+PY
+```
+
+### 2.3 创建目录
+
+```bash
+mkdir -p \
+  data/classifiers \
+  data/wiki \
+  data/commoncrawl \
+  data/CC \
+  data/raw \
+  data/paloma \
+  data/leaderboard \
+  data/leaderboard/classifier \
+  out/models
+```
+
+### 2.4 下载外部分类器模型
+
+代码会优先查找：
+
+1. `/data/classifiers/`
+2. `data/classifiers/`
+3. `../classifiers/`
+
+个人服务器推荐直接放在 `data/classifiers/`。
+
+```bash
 wget -O data/classifiers/dolma_fasttext_nsfw_jigsaw_model.bin \
-    "https://huggingface.co/allenai/dolma-jigsaw-fasttext-bigrams-nsfw/resolve/main/model.bin"
+  "https://huggingface.co/allenai/dolma-jigsaw-fasttext-bigrams-nsfw/resolve/main/model.bin"
+
 wget -O data/classifiers/dolma_fasttext_hatespeech_jigsaw_model.bin \
-    "https://huggingface.co/allenai/dolma-jigsaw-fasttext-bigrams-hatespeech/resolve/main/model.bin"
+  "https://huggingface.co/allenai/dolma-jigsaw-fasttext-bigrams-hatespeech/resolve/main/model.bin"
+
+wget -O data/classifiers/lid.176.bin \
+  "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin"
 ```
 
-> **注意**：`get_assets.sh` 是为集群环境设计的（优先从 `/data/classifiers/` 创建软链，否则下载到 `cs336_data/assets/`），**不适合个人服务器直接使用**，请用上述 wget 命令替代。
-
-| 文件名 | 来源 |
-|---|---|
-| `dolma_fasttext_nsfw_jigsaw_model.bin` | [allenai/dolma-jigsaw-fasttext-bigrams-nsfw](https://huggingface.co/allenai/dolma-jigsaw-fasttext-bigrams-nsfw) |
-| `dolma_fasttext_hatespeech_jigsaw_model.bin` | [allenai/dolma-jigsaw-fasttext-bigrams-hatespeech](https://huggingface.co/allenai/dolma-jigsaw-fasttext-bigrams-hatespeech) |
-
-### 2. 语种识别模型
-
-下载 fastText 的语言识别模型（~126 MB），与 § 1 放在同一目录 `data/classifiers/`：
+### 2.5 准备 Wikipedia 标题与 URL 列表
 
 ```bash
-wget https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin -O data/classifiers/lid.176.bin
+wget -O data/wiki/titles.gz \
+  "https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-all-titles-in-ns0.gz"
 
-# 压缩精简版（~917 KB，精度略降）
-# wget https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.ftz -O data/classifiers/lid.176.ftz
+zcat data/wiki/titles.gz \
+  | tail -n +2 \
+  | awk '{print "https://en.wikipedia.org/wiki/"$1}' \
+  | gzip > data/wiki/enwiki-20240420-extracted_urls.txt.gz
 ```
 
-- 官方文档：[fasttext.cc/docs/en/language-identification.html](https://fasttext.cc/docs/en/language-identification.html)
+### 2.6 构建 Paloma `c4_100_domains` 验证集 `.bin`
 
-### 3. 质量分类器 A——测试用（`cs336_data/quality_classifier/`）
-
-质量分类器是一个二分类 fastText 模型，用于区分"高质量文本"（维基百科风格）和"低质量文本"（普通 CC 网页），需要**自行准备训练数据并训练**。
-
-#### 训练数据来源
-
-| 类别 | 标签 | 来源 |
-|---|---|---|
-| 正例（高质量） | `__label__positive` | 维基百科页面（通过 Wikipedia URL 列表爬取） |
-| 负例（低质量） | `__label__negative` | Common Crawl 原始 WARC 文件中随机采样的网页 |
-
-#### 完整数据准备流程（7步）
-
-**所需原始数据：**
-
-**a. 维基百科 URL 列表（测试分类器正例）**
-
-原集群提供的是预处理文件，为了本地平替，你可以直接下载官方的维基百科全量页面标题并拼接出完整的 URL：
+访问 Paloma 前，先确保你已经登录 Hugging Face 并同意该数据集的访问协议。
 
 ```bash
-mkdir -p data/wiki
-# 1. 下载维基百科全量页面标题库（约 100 MB）
-wget https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-all-titles-in-ns0.gz -O data/wiki/titles.gz
-
-# 2. 将标题解压并拼接为真实的维基百科 URL 列表，再次压缩以符合输入要求 (.txt.gz)
-zcat data/wiki/titles.gz | tail -n +2 | awk '{print "https://en.wikipedia.org/wiki/"$1}' | gzip > data/wiki/enwiki-20240420-extracted_urls.txt.gz
-```
-十几秒即可自动生成几十万个正例链接的压缩包，完美替代复杂的 SQL 库解析逻辑。
-
-**b. CC WARC 文件（含 HTML）**
-
-负例需要包含 HTML 的原始 WARC 文件（不是 WET）。
-
-推荐先下载官方文件清单，再从清单里挑一个真实存在的文件保存为 `data/CC/example.warc.gz`。这样比把某个固定 segment 路径写死在文档里更稳妥：
-
-```bash
-mkdir -p data/CC data/commoncrawl
-
-# 下载 WARC 文件列表
-wget -O data/commoncrawl/warc.paths.gz \
-    https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/warc.paths.gz
-zcat data/commoncrawl/warc.paths.gz | head -3  # 预览前几个文件路径
-
-# 下载单个 WARC 文件（主 Pipeline 进度和检验用）
-# 这里把清单中的第一个文件保存为 data/CC/example.warc.gz，便于直接复用后续命令
-first_warc_path=$(zcat data/commoncrawl/warc.paths.gz | head -1)
-wget -O data/CC/example.warc.gz "https://data.commoncrawl.org/${first_warc_path}"
-```
-
-> 💡 本地只想先跑通 `04-prepare_negative_samples.py` 的话，下载 1 个 WARC 文件就够了；压缩后大约 1 GB 左右。
-
-```bash
-# Step 1：从维基百科 URL 列表中随机采样 10万个 URL
-uv run python cs336_data/quality_classifier/01-sample_positive_urls.py \
-    --inpath  data/wiki/enwiki-20240420-extracted_urls.txt.gz \
-    --outpath data/wiki/subsampled_positive_urls.txt \
-    --max-urls 100000
-
-# Step 2：用 wget 批量爬取这些 URL，保存为 WARC 文件
-#         （结果存为 data/wiki/unfiltered_positive_samples.warc.gz）
-bash cs336_data/quality_classifier/02-download_positive_urls.sh
-
-# Step 3：从爬取结果中过滤正例
-#         过滤条件：英文 + 非NSFW + 非毒性 + 通过 Gopher 质量过滤
-#         输出：data/wiki/train_positive.txt（每行一个 fastText 样本）
-uv run python cs336_data/quality_classifier/03-filter_positive_samples.py
-
-# Step 4：从 CC WARC 文件中随机采样负例
-#         输出：data/wiki/train_negative.txt
-uv run python cs336_data/quality_classifier/04-prepare_negative_samples.py \
-    --warc-path data/CC/example.warc.gz \
-    -n 13500   # 采样数量，与正例保持平衡
-
-# Step 5：合并正负例，平衡类别数量
-uv run python cs336_data/quality_classifier/05-merge_samples.py \
-    --n 13500  # 正负各取 13500 条
-
-# Step 6：切分训练集 / 验证集（默认 90% / 10%）
-#         输出：data/wiki/quality.train 和 data/wiki/quality.valid
-uv run python cs336_data/quality_classifier/06-split_train_valid.py
-
-# Step 7：训练 fastText 分类器
-#         输出：out/models/quality.bin
-uv run python cs336_data/quality_classifier/07-train.py
-```
-
-#### 训练参数
-
-```python
-fasttext.train_supervised(
-    input="data/wiki/quality.train",
-    epoch=30,
-    lr=0.2,       # 经实验，lr=0.2 比默认值效果更好
-)
-# 最终验证集准确率约 0.81
-```
-
-> ⚠️ **注意**：Step 3 依赖 NSFW 和毒性分类器（需要先配置好 `classifiers/` 目录下的两个 dolma 模型）。如果跳过 NSFW/毒性过滤，可以直接用语言过滤 + Gopher 过滤来筛选正例。
-
-### 4. Common Crawl 原始数据（Leaderboard Pipeline 需要）
-
-如果要运行完整的 Leaderboard 数据过滤 Pipeline，需要获取 Common Crawl WET 文件：
-- 格式：`CC-MAIN-*.warc.wet.gz`
-- 默认路径：`/data/CC/`（可通过 `--data-dir` 参数指定）
-- 官方地址：[https://commoncrawl.org/](https://commoncrawl.org/)
-- 文件列表：`https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/wet.paths.gz`
-
-推荐和 WARC 一样，先下载 `wet.paths.gz`，再从清单中选择需要的 WET 文件；不要依赖某个写死的 segment 路径长期有效。
-
-> ⚠️ **注意格式区别**：主 Pipeline（Step 1–5）使用 **WET 格式**（已提取纯文本）；质量分类器负例准备需要 **WARC 格式**（含原始 HTML）。两者均可从 commoncrawl.org 下载，路径格式不同。
-
-#### 存储说明
-
-本项目原始运行环境为**斯坦福 HPC 集群**，CC 原始数据放在集群共享存储 `/data/CC/` 下（课程组统一预置，学生只读访问）。个人复现时需自行下载。
-
-各阶段数据量（基于 5,000 个 WET 文件）：
-
-| 阶段 | 大小估算 |
-|---|---|
-| 原始 CC WET 文件（5,000个，压缩） | ~1 TB |
-| Step 1 英文过滤后（~14%） | ~140 GB |
-| Step 2–3 启发式+去重后（~4%） | ~40 GB |
-| Step 4 分类器过滤后 | ~15 GB |
-| **最终 tokenized `.bin`（固定产物）** | **~12.8 GB** |
-
-> 💡 如果存储有限，可以流式处理（边过滤边写出），每次只保留当前步的输出，处理完后删除上一步的中间产物。
-
-### 5. Paloma 验证集（Leaderboard 分类器正例 + 模型评估）
-
-Leaderboard 分类器和最终模型评估都依赖 **Paloma benchmark** 的 `c4_100_domains` 子集。
-
-- **HuggingFace**：[huggingface.co/datasets/allenai/paloma](https://huggingface.co/datasets/allenai/paloma)
-- **GitHub**：[github.com/allenai/paloma](https://github.com/allenai/paloma)
-- **访问限制**：数据集设有访问限制，需登录 HuggingFace 并同意 AI2 ImpACT License
-
-```bash
-# 由于缺乏集群，后续排行榜评估和模型验证均强依赖该文件的 tokenized 格式，
-# 请安装额外依赖并运行以下 Python 脚本自动构建成所需的 .bin 文件。
-# `transformers` 已经会随 `cs336-basics` 安装；这里只需额外补 `datasets`：
-uv run pip install datasets
-# 或：uv add datasets
-```
-
-```python
-# build_paloma.py
+uv run python - <<'PY'
 import os
 import numpy as np
-from tqdm import tqdm
 from datasets import load_dataset
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
-print("Downloading Paloma validation dataset...")
 try:
-    ds = load_dataset('allenai/paloma', 'c4_100_domains', split='validation')
+    ds = load_dataset("allenai/paloma", "c4_100_domains", split="validation")
 except ValueError:
-    # 当前 Hugging Face 上该子集公开的 split 名称通常是 `val` / `test`
-    ds = load_dataset('allenai/paloma', 'c4_100_domains', split='val')
-tokenizer = AutoTokenizer.from_pretrained('gpt2')
+    ds = load_dataset("allenai/paloma", "c4_100_domains", split="val")
 
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
 all_ids = []
 for item in tqdm(ds, desc="Tokenizing Paloma"):
-    # 按照代码规范，文本必须带有结束符 EOS (50256)
-    tokens = tokenizer.encode(item['text']) + [tokenizer.eos_token_id]
-    all_ids.extend(tokens)
+    all_ids.extend(tokenizer.encode(item["text"]) + [tokenizer.eos_token_id])
 
-out_dir = "data/paloma"
-os.makedirs(out_dir, exist_ok=True)
-out_path = f"{out_dir}/tokenized_paloma_c4_100_domains_validation.bin"
+os.makedirs("data/paloma", exist_ok=True)
+out_path = "data/paloma/tokenized_paloma_c4_100_domains_validation.bin"
 np.array(all_ids, dtype=np.uint16).tofile(out_path)
-print(f"Success! Saved {len(all_ids)} tokens to {out_path}")
-```
+print(f"Saved {len(all_ids)} tokens to {out_path}")
+PY
 
-再建立项目内兼容路径：
-
-```bash
-mkdir -p data/leaderboard
 ln -sf ../paloma/tokenized_paloma_c4_100_domains_validation.bin \
-    data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin
+  data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin
 ```
 
-如果你沿用 `cs336-basics/configs/experiment/*.yaml` 里的默认 `valid_bin: /data/paloma/...` 配置，还需要二选一：
-
-1. 额外创建 `/data/paloma/tokenized_paloma_c4_100_domains_validation.bin` 的软链
-2. 直接把这些配置文件里的 `valid_bin` 改成项目内路径 `data/paloma/tokenized_paloma_c4_100_domains_validation.bin`
-
-这样即可产出模型验证时的 `valid_bin` 数据，并兼容本仓库中两套读取路径。
-
-### 6. 质量分类器 B——Leaderboard 实际使用（`cs336_data/leaderboard/classifier/`）
-
-⚠️ **这是 Pipeline Step 4 实际调用的分类器**，与 § 3 的测试用分类器完全独立。
-
-两者的核心区别：
-
-| | 测试用（§ 3） | Leaderboard 实际用（§ 6） |
-|---|---|---|
-| 正例来源 | 维基百科页面（爬取） | **Paloma `c4_100_domains` 验证集** |
-| 负例来源 | CC WARC 随机采样 | Step 3 去重后的 CC 文本 |
-| 模型路径 | `out/models/quality.bin` | `data/leaderboard/classifier/quality.bin`（个人服务器推荐） |
-| 目的 | 通过单元测试 | 最终数据过滤，最小化 Paloma 验证损失 |
-
-#### 完整训练流程（5步）
-
-**所需原始数据**：Paloma 验证集（§ 5）+ Step 3 去重后的 CC 文本
-
-> ⚠️ 如果你只下载了 2–3 个 WET 文件做本地小样本实验，`03-select_negatives.py` 默认的
-> `28,000` 训练负例和 `500` 验证负例通常过大。此时请显式调小：
-> ```bash
-> uv run python cs336_data/leaderboard/classifier/03-select_negatives.py \
->     --data-dir data/03-deduped \
->     --num-train-examples 1000 \
->     --num-valid-examples 100
-> ```
-
-所有脚本默认输出到 `data/leaderboard/classifier/`，无需修改代码：
+如果你沿用 `cs336-basics` 配置里写死的 `/data/paloma/...`，再二选一：
 
 ```bash
-# Step 1：将 Paloma 验证集（tokenized .bin）解码为文本
-#   输入：data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin
-#   输出：data/leaderboard/classifier/paloma_c4_100_domains_validation_text.txt
-uv run python cs336_data/leaderboard/classifier/01-val_to_text.py
+# 方案 A：额外做一个全局兼容软链
+sudo mkdir -p /data/paloma
+sudo ln -sf /content/cs336-a4/data/paloma/tokenized_paloma_c4_100_domains_validation.bin \
+  /data/paloma/tokenized_paloma_c4_100_domains_validation.bin
 
-# Step 2：从 Paloma 文本中采样正例（28,000 训练 + 500 验证，不足时重复采样）
-uv run python cs336_data/leaderboard/classifier/02-sample_positives.py
-
-# Step 3：从 Step 3 去重后的 CC 文本中采样负例
-#   --data-dir 指向你自己的 Step 3 输出目录。
-#   如果你沿用下面“小规模实验”的命令，则这里应传 data/03-deduped；
-#   如果你自己把 Step 3 输出放在 data/leaderboard/03-deduped，也同样可以。
-uv run python cs336_data/leaderboard/classifier/03-select_negatives.py \
-    --data-dir data/03-deduped
-
-# Step 4：合并正负例，生成 quality.train 和 quality.valid
-uv run python cs336_data/leaderboard/classifier/04-merge_samples.py
-
-# Step 5：训练 fastText 分类器
-#   输出：data/leaderboard/classifier/quality.bin（供 04-c4_100_classify.py 自动加载）
-uv run python cs336_data/leaderboard/classifier/05-train.py
-```
-
-> 所有脚本均支持 `--classifier-dir` 参数自定义输出目录，默认为 `data/leaderboard/classifier/`。`04-c4_100_classify.py` 会自动在该路径找到模型，无需手动修改代码。
-
----
-
-## 运行单元测试
-
-```bash
-# 运行所有测试（需要已配置好模型文件和 NLTK 数据）
-uv run pytest tests/ -v
-
-# 运行指定测试文件
-uv run pytest tests/test_pii.py -v
-uv run pytest tests/test_quality.py -v
-uv run pytest tests/test_deduplication.py -v
-```
-
-> 首次运行可能需要下载 NLTK 数据：
-> ```python
-> import nltk; nltk.download('punkt_tab')
-> ```
-
----
-
-## 各功能模块使用方式
-
-### HTML 文本提取
-
-```python
-from cs336_data.extract_text import extract_text_from_html_bytes
-
-with open("page.html", "rb") as f:
-    html_bytes = f.read()
-
-text = extract_text_from_html_bytes(html_bytes)
-print(text)
-```
-
-### 语种识别
-
-```python
-from cs336_data.language_identification import identify_language
-
-lang, score = identify_language("Hello, this is English text.")
-print(lang, score)  # en  0.9999...
-```
-
-### PII 脱敏
-
-```python
-from cs336_data.mask_pii import mask_emails, mask_phone_numbers, mask_ips
-
-text = "Contact us at hello@example.com or call 123-456-7890."
-masked, count = mask_emails(text)
-print(masked)  # Contact us at |||EMAIL_ADDRESS||| or call 123-456-7890.
-
-masked, count = mask_phone_numbers(text)
-print(masked)  # Contact us at hello@example.com or call |||PHONE_NUMBER|||.
-```
-
-### 有害内容分类
-
-```python
-from cs336_data.harmful_content import classify_nsfw, classify_toxic_speech
-
-label, score = classify_nsfw("some text here")
-print(label, score)  # "nsfw" or "non-nsfw", float
-
-label, score = classify_toxic_speech("some text here")
-print(label, score)  # "toxic" or "non-toxic", float
-```
-
-### Gopher 质量过滤
-
-```python
-from cs336_data.gopher_quality_filters import gopher_quality_filter
-
-text = "This is a long enough piece of text..." * 100
-is_good = gopher_quality_filter(text)
-print(is_good)  # True or False
-```
-
-过滤规则：
-- 词数在 50 ~ 100,000 之间
-- 平均词长在 3 ~ 10 字符之间
-- 以省略号结尾的行不超过 30%
-- 含字母字符的词占比 ≥ 80%
-
-### 质量分类器
-
-```python
-from cs336_data.quality_classifier.quality_classifier import classify_quality
-
-label, score = classify_quality("Some web page text...")
-print(label, score)  # "wiki" (高质量) or "cc" (低质量), float
-```
-
-### 精确去重
-
-```python
-from cs336_data.exact_deduplication import exact_line_dedupe
-from pathlib import Path
-
-input_files = list(Path("./data").glob("*.txt"))
-exact_line_dedupe(input_files, output_directory=Path("./deduped"))
-```
-
-### MinHash 模糊去重
-
-```python
-from cs336_data.minhash_deduplication import minhash_dedupe
-from pathlib import Path
-
-input_files = list(Path("./data").glob("*.txt"))
-minhash_dedupe(
-    input_files=input_files,
-    num_hashes=100,
-    num_bands=10,
-    ngrams=5,
-    jaccard_threshold=0.8,
-    output_directory=Path("./deduped"),
-)
+# 方案 B：直接改训练配置里的 valid_bin 路径
 ```
 
 ---
 
-## 小规模实验（本地验证 Pipeline 逻辑）
+## 3. 版本 A：小样本跑通
 
-只需下载 2–3 个 WET 文件即可验证本地流程；通常每个压缩文件约 90–100 MB，总体约 180–300 MB。
+### 3.1 目标
 
-### 第一步：下载少量 WET 文件
+这条路线的目标是：
+
+- 跑通两个 fastText 质量分类器
+- 跑通 Leaderboard Step 1 到 Step 5
+- 生成一个小的 `data/tokens.bin`
+- 不做最终语言模型训练
+
+建议磁盘预留：`5G` 到 `10G`
+
+### 3.2 下载少量 Common Crawl 样本
+
+#### 下载 1 个 WARC 给测试分类器 A 做负例
 
 ```bash
-mkdir -p data/raw data/commoncrawl
+wget -O data/commoncrawl/warc.paths.gz \
+  "https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/warc.paths.gz"
 
-# 下载 WET 文件列表
+first_warc_path=$(zcat data/commoncrawl/warc.paths.gz | head -1)
+wget -O data/CC/example.warc.gz \
+  "https://data.commoncrawl.org/${first_warc_path}"
+```
+
+#### 下载 2 个 WET 给主 pipeline 做 smoke test
+
+```bash
 wget -O data/commoncrawl/wet.paths.gz \
-    https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/wet.paths.gz
-zcat data/commoncrawl/wet.paths.gz | head -3
+  "https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/wet.paths.gz"
 
-# 下载前 2 个 WET 文件；如果你想多留一点样本，可把 head -2 改成 head -3
 zcat data/commoncrawl/wet.paths.gz | head -2 | while read -r wet_path; do
-    wget -P data/raw "https://data.commoncrawl.org/${wet_path}"
+  wget -P data/raw "https://data.commoncrawl.org/${wet_path}"
 done
 ```
 
-> 完整文件列表：`https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/wet.paths.gz`
+### 3.3 训练测试质量分类器 A
 
-### 第二步：依次运行各步骤
+这套分类器只用于测试和作业要求，本身不参与最终 Leaderboard 主 pipeline。
 
-**划重点：**原作者在所有的 `01` 到 `05` 脚本中都体贴地内置了小样本本地运行参数：
-- `--max-files N`：只处理输入目录内的前 N 个文件，极大缩小测试时间。
-- `--single`：禁用集群，直接在本地单线程跑完清洗流程，并打印 tqdm 进度。
-- `--mp`：也是本地执行，但会调用机器的所有 CPU 核心（通过 ProcessPool）多核加速跑。
+#### 为本地 smoke test 写一个稳定的 Wikipedia 正例列表
 
-测试小段核心逻辑时，建议把 `--max-files` 显式设小：
+随机从几十万 Wikipedia URL 里直接抽样，容易碰到 429 或抽到很怪的页面标题。  
+本地小样本更推荐直接用一组固定英文页面：
 
 ```bash
-# Step 1: 语种过滤（保留英文，p(English) > 0.85）
-uv run python cs336_data/leaderboard/01-language.py \
-    --data-dir data/raw \
-    --out-dir  data/01-english \
-    --single \
-    --max-files 2
-
-# Step 2: 启发式过滤（C4 + Gopher 规则）
-uv run python cs336_data/leaderboard/02-heuristics.py \
-    --data-dir data/01-english \
-    --out-dir  data/02-heuristics \
-    --single \
-    --max-files 2
-
-# Step 3: 精确行去重
-uv run python cs336_data/leaderboard/03-exact_dedupe.py \
-    --data-dir data/02-heuristics \
-    --outdir   data/03-deduped
-
-# Step 4: 质量分类器过滤（需要先训练好 data/leaderboard/classifier/quality.bin）
-uv run python cs336_data/leaderboard/04-c4_100_classify.py \
-    --data-dir data/03-deduped \
-    --out-dir  data/04-classified \
-    --single \
-    --max-files 2
-
-# Step 5: Tokenize
-uv run python cs336_data/leaderboard/05-tokenize.py \
-    --input-dir  data/04-classified \
-    --output-path data/tokens.bin
+cat > data/wiki/subsampled_positive_urls.txt <<'EOF'
+https://en.wikipedia.org/wiki/Artificial_intelligence
+https://en.wikipedia.org/wiki/Computer_science
+https://en.wikipedia.org/wiki/Mathematics
+https://en.wikipedia.org/wiki/Physics
+https://en.wikipedia.org/wiki/Chemistry
+https://en.wikipedia.org/wiki/Biology
+https://en.wikipedia.org/wiki/History
+https://en.wikipedia.org/wiki/Philosophy
+https://en.wikipedia.org/wiki/Economics
+https://en.wikipedia.org/wiki/Statistics
+https://en.wikipedia.org/wiki/Machine_learning
+https://en.wikipedia.org/wiki/Deep_learning
+https://en.wikipedia.org/wiki/Natural_language_processing
+https://en.wikipedia.org/wiki/Neural_network
+https://en.wikipedia.org/wiki/Algorithm
+https://en.wikipedia.org/wiki/Data_science
+https://en.wikipedia.org/wiki/Probability
+https://en.wikipedia.org/wiki/Calculus
+https://en.wikipedia.org/wiki/Linear_algebra
+https://en.wikipedia.org/wiki/Quantum_mechanics
+https://en.wikipedia.org/wiki/Relativity
+https://en.wikipedia.org/wiki/Cell_(biology)
+https://en.wikipedia.org/wiki/DNA
+https://en.wikipedia.org/wiki/Evolution
+https://en.wikipedia.org/wiki/World_War_II
+https://en.wikipedia.org/wiki/Ancient_Greece
+https://en.wikipedia.org/wiki/Renaissance
+https://en.wikipedia.org/wiki/Democracy
+https://en.wikipedia.org/wiki/Climate_change
+https://en.wikipedia.org/wiki/Solar_System
+EOF
 ```
 
-### 前置依赖说明
+#### 生成训练数据并训练
 
-| 步骤 | 需要的模型文件 |
-|---|---|
-| Step 1（语种过滤） | `data/classifiers/lid.176.bin` |
-| Step 2（启发式过滤） | 无需模型文件，只用规则过滤；但依赖 `transformers`（已含在 `uv sync`） |
-| Step 3（精确去重） | 无需模型文件 |
-| Step 4（质量分类） | Leaderboard 分类器 `data/leaderboard/classifier/quality.bin`（需先完成 § 6 训练；脚本会自动查找，无需改代码） |
-| Step 1–3 | 只需 `lid.176.bin`，可独立验证前三步 |
+```bash
+# Step A1: 下载这些 Wikipedia 页面，写成 WARC
+bash cs336_data/quality_classifier/02-download_positive_urls.sh
 
----
+# Step A2: 过滤正例
+uv run python cs336_data/quality_classifier/03-filter_positive_samples.py
 
-## 完整数据过滤 Pipeline（集群规模）
+# Step A3: 从 WARC 中按正例数量采样负例
+pos_n=$(wc -l < data/wiki/train_positive.txt)
+uv run python cs336_data/quality_classifier/04-prepare_negative_samples.py \
+  --warc-path data/CC/example.warc.gz \
+  -n "${pos_n}"
 
-脚本均在 `cs336_data/leaderboard/` 目录下，按编号顺序执行。  
-默认模式（不加 `--single` / `--mp`）为 **SLURM 集群并行**，需要配置 submitit 环境。
+# Step A4: 合并并切分
+uv run python cs336_data/quality_classifier/05-merge_samples.py --n "${pos_n}"
+uv run python cs336_data/quality_classifier/06-split_train_valid.py
+
+# Step A5: 训练测试分类器 A
+uv run python cs336_data/quality_classifier/07-train.py
+```
+
+关键产物：
+
+- `data/wiki/quality.train`
+- `data/wiki/quality.valid`
+- `out/models/quality.bin`
+
+如果你不是为了作业测试，而只是想跑通主 pipeline，这一节可以跳过。
+
+### 3.4 运行 Leaderboard Step 1 到 Step 3
 
 ```bash
 # Step 1: 语种过滤
 uv run python cs336_data/leaderboard/01-language.py \
-    --data-dir /data/CC \
-    --out-dir  /data/output/01-english
-    # 加 --single 单进程；加 --mp 本地多进程
+  --data-dir data/raw \
+  --out-dir data/01-english \
+  --single \
+  --max-files 2
 
-# Step 2: 启发式过滤（C4 + Gopher 规则）
+# Step 2: 启发式过滤
 uv run python cs336_data/leaderboard/02-heuristics.py \
-    --data-dir /data/output/01-english \
-    --out-dir  /data/output/02-heuristics
+  --data-dir data/01-english \
+  --out-dir data/02-heuristics \
+  --single \
+  --max-files 2
 
-# Step 3: 精确行去重
+# Step 3: 精确去重
 uv run python cs336_data/leaderboard/03-exact_dedupe.py \
-    --data-dir /data/output/02-heuristics \
-    --outdir   /data/output/03-deduped
+  --data-dir data/02-heuristics \
+  --outdir data/03-deduped
+```
 
-# Step 4: 质量分类器过滤
+关键产物：
+
+- `data/01-english`
+- `data/02-heuristics`
+- `data/03-deduped`
+
+### 3.5 训练 Leaderboard 质量分类器 B
+
+这是 Step 4 真正使用的分类器，和测试分类器 A 完全独立。
+
+#### 小样本版本推荐参数
+
+当你只有 2 个 WET 样本时，不要直接用默认 `28000/500`。  
+推荐先用 `1000/100` 跑通：
+
+```bash
+# Step B1: 把 Paloma validation.bin 解码成文本
+uv run python cs336_data/leaderboard/classifier/01-val_to_text.py
+
+# Step B2: 采样正例
+uv run python cs336_data/leaderboard/classifier/02-sample_positives.py \
+  --num-train-examples 1000 \
+  --num-valid-examples 100
+
+# Step B3: 从 Step 3 输出里采样负例
+uv run python cs336_data/leaderboard/classifier/03-select_negatives.py \
+  --data-dir data/03-deduped \
+  --num-train-examples 1000 \
+  --num-valid-examples 100
+
+# Step B4: 合并正负例
+uv run python cs336_data/leaderboard/classifier/04-merge_samples.py
+
+# Step B5: 训练 Leaderboard 分类器
+uv run python cs336_data/leaderboard/classifier/05-train.py
+```
+
+关键产物：
+
+- `data/leaderboard/classifier/quality.train`
+- `data/leaderboard/classifier/quality.valid`
+- `data/leaderboard/classifier/quality.bin`
+
+### 3.6 运行 Leaderboard Step 4 到 Step 5
+
+```bash
+# Step 4: 用分类器 B 过滤
 uv run python cs336_data/leaderboard/04-c4_100_classify.py \
-    --data-dir /data/output/03-deduped \
-    --out-dir  /data/output/04-classified
+  --data-dir data/03-deduped \
+  --out-dir data/04-classified \
+  --single \
+  --max-files 2
 
 # Step 5: Tokenize
 uv run python cs336_data/leaderboard/05-tokenize.py \
-    --input-dir  /data/output/04-classified \
-    --output-path /data/output/tokens.bin
+  --input-dir data/04-classified \
+  --output-path data/tokens.bin
 ```
+
+关键产物：
+
+- `data/04-classified`
+- `data/tokens.bin`
+
+`05-tokenize.py` 可能会打印 GPT-2 的“长度超过 1024”提示。  
+这里只是在做 tokenizer 编码并写 `.bin`，这条提示不影响该步骤完成。
 
 ---
 
-## 模型训练
+## 4. 版本 B：全量复现
 
-训练使用 `cs336-basics` 提供的训练代码，如果是集群环境，通过 SLURM 提交：
+### 4.1 进入全量前，哪些能直接沿用
+
+如果你已经做完“小样本跑通”，以下内容可以直接沿用，不用重做：
+
+- `uv sync` 安装好的环境
+- `nltk` 数据
+- `data/classifiers/*.bin`
+- `data/wiki/titles.gz`
+- `data/wiki/enwiki-20240420-extracted_urls.txt.gz`
+- `data/paloma/tokenized_paloma_c4_100_domains_validation.bin`
+- `data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin`
+
+以下内容建议重做：
+
+- `data/raw/*.warc.wet.gz`
+- `data/01-english`
+- `data/02-heuristics`
+- `data/03-deduped`
+- `data/04-classified`
+- `data/tokens.bin`
+- `data/leaderboard/classifier/quality.*`
+- `data/leaderboard/classifier/quality.bin`
+
+### 4.2 下载更多 Common Crawl 数据
+
+#### 如果你还需要训练测试分类器 A
+
+测试分类器 A 只需要少量 WARC 负例，所以 1 个 WARC 通常就够了。  
+如果你已经有 `data/CC/example.warc.gz`，这里一般不用重下。
+
+#### 下载更多 WET 给主 pipeline
+
+把下面的 `N` 改成你要处理的 WET 文件数。
+
+```bash
+mkdir -p data/raw data/commoncrawl
+
+wget -O data/commoncrawl/wet.paths.gz \
+  "https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/wet.paths.gz"
+
+N=5000
+zcat data/commoncrawl/wet.paths.gz | head -n "${N}" | while read -r wet_path; do
+  wget -P data/raw "https://data.commoncrawl.org/${wet_path}"
+done
+```
+
+经验量级：
+
+| 阶段 | 量级估算 |
+|---|---|
+| 原始 5000 个 WET 压缩包 | 约 `1 TB` |
+| Step 1 后 | 约 `140 GB` |
+| Step 2-3 后 | 约 `40 GB` |
+| Step 4 后 | 约 `15 GB` |
+| 最终 `tokens.bin` | 约 `12.8 GB` |
+
+### 4.3 测试分类器 A 是否需要重做
+
+通常不需要。
+
+原因：
+
+- 它不参与最终 Leaderboard 主 pipeline
+- 它主要用于作业测试和辅助验证
+- 你已经在小样本路线里训练过一次，就足够证明代码和依赖无误
+
+只有在以下情况才建议重做：
+
+- 你明确想扩大 Wikipedia 正例规模
+- 你想重新比较不同超参数或不同采样策略
+
+如果你确实要放大训练集，可以使用真实随机采样：
+
+```bash
+uv run python cs336_data/quality_classifier/01-sample_positive_urls.py \
+  --inpath data/wiki/enwiki-20240420-extracted_urls.txt.gz \
+  --outpath data/wiki/subsampled_positive_urls.txt \
+  --max-urls 100000
+```
+
+之后重复版本 A 里的分类器 A 流程即可。
+
+### 4.4 全量运行 Leaderboard Step 1 到 Step 3
+
+如果你在有 SLURM 的集群上跑，可以直接不加 `--single` / `--mp`，脚本会走 submitit。  
+如果你是在本地机器上跑，推荐显式使用 `--mp`。
+
+#### 本地多进程版本
+
+```bash
+uv run python cs336_data/leaderboard/01-language.py \
+  --data-dir data/raw \
+  --out-dir data/01-english \
+  --mp
+
+uv run python cs336_data/leaderboard/02-heuristics.py \
+  --data-dir data/01-english \
+  --out-dir data/02-heuristics \
+  --mp
+
+uv run python cs336_data/leaderboard/03-exact_dedupe.py \
+  --data-dir data/02-heuristics \
+  --outdir data/03-deduped
+```
+
+#### 集群默认版本
+
+```bash
+uv run python cs336_data/leaderboard/01-language.py \
+  --data-dir /data/CC \
+  --out-dir /data/output/01-english
+
+uv run python cs336_data/leaderboard/02-heuristics.py \
+  --data-dir /data/output/01-english \
+  --out-dir /data/output/02-heuristics
+
+uv run python cs336_data/leaderboard/03-exact_dedupe.py \
+  --data-dir /data/output/02-heuristics \
+  --outdir /data/output/03-deduped
+```
+
+### 4.5 用更大的 Step 3 输出重训 Leaderboard 分类器 B
+
+正式全量推荐重新做这一段。
+
+```bash
+# Step B1
+uv run python cs336_data/leaderboard/classifier/01-val_to_text.py
+
+# Step B2
+uv run python cs336_data/leaderboard/classifier/02-sample_positives.py
+
+# Step B3
+uv run python cs336_data/leaderboard/classifier/03-select_negatives.py \
+  --data-dir data/03-deduped
+
+# Step B4
+uv run python cs336_data/leaderboard/classifier/04-merge_samples.py
+
+# Step B5
+uv run python cs336_data/leaderboard/classifier/05-train.py
+```
+
+默认规模是：
+
+- 训练正例 `28000`
+- 验证正例 `500`
+- 训练负例 `28000`
+- 验证负例 `500`
+
+这套默认值适合“有明显多于 2 个 WET 文件”的情况。
+
+### 4.6 全量运行 Leaderboard Step 4 到 Step 5
+
+#### 本地多进程版本
+
+```bash
+uv run python cs336_data/leaderboard/04-c4_100_classify.py \
+  --data-dir data/03-deduped \
+  --out-dir data/04-classified \
+  --mp
+
+uv run python cs336_data/leaderboard/05-tokenize.py \
+  --input-dir data/04-classified \
+  --output-path data/tokens.bin
+```
+
+#### 集群默认版本
+
+```bash
+uv run python cs336_data/leaderboard/04-c4_100_classify.py \
+  --data-dir /data/output/03-deduped \
+  --out-dir /data/output/04-classified
+
+uv run python cs336_data/leaderboard/05-tokenize.py \
+  --input-dir /data/output/04-classified \
+  --output-path /data/output/tokens.bin
+```
+
+做到这里，就已经完成了“最终语言模型训练之前”的全部步骤。
+
+---
+
+## 5. 最终产物速查
+
+| 产物 | 说明 |
+|---|---|
+| `out/models/quality.bin` | 测试质量分类器 A |
+| `data/leaderboard/classifier/quality.bin` | Leaderboard Step 4 实际使用的分类器 B |
+| `data/01-english` | Step 1 输出 |
+| `data/02-heuristics` | Step 2 输出 |
+| `data/03-deduped` | Step 3 输出 |
+| `data/04-classified` | Step 4 输出 |
+| `data/tokens.bin` | Step 5 输出，可直接供最终训练使用 |
+
+---
+
+## 6. 如果你还要继续做最终语言模型训练
+
+这一步不属于“训练前数据准备”，但命令放在这里方便对照。
+
+### 集群
 
 ```bash
 sbatch cs336_data/leaderboard/train.sh
 ```
 
-如果是本地单机环境（无需 sbatch）：
+### 本地多卡
 
 ```bash
-# 请根据你本地实际的 GPU 数量修改 --nproc_per_node
 uv run torchrun --standalone --nproc_per_node=2 \
-    scripts/train.py \
-    --config-name=experiment/bucketed.yaml
+  scripts/train.py \
+  --config-name=experiment/bucketed.yaml
 ```
 
 ---
 
-## 提交
+## 7. 测试与提交
+
+### 运行测试
+
+```bash
+uv run pytest tests/ -v
+```
+
+如果只想测局部：
+
+```bash
+uv run pytest tests/test_pii.py -v
+uv run pytest tests/test_quality.py -v
+uv run pytest tests/test_deduplication.py -v
+```
+
+### 打包提交
 
 ```bash
 bash test_and_make_submission.sh
 ```
-
-该脚本会：
-1. 安装依赖
-2. 运行所有单元测试
-3. 将代码打包为 `.zip` 提交文件

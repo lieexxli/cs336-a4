@@ -5,8 +5,8 @@ import random
 from cs336_data.exact_deduplication import exact_line_dedupe_docs
 import time
 
-DATA_DIR = "/data/c-sniderb/a4-leaderboard/02-heuristics"
-OUTDIR = "/data/c-sniderb/a4-leaderboard/03-exact-deduped"
+DATA_DIR = "data/02-heuristics"
+OUTDIR = "data/03-deduped"
 
 
 def main(data_dir: str = DATA_DIR, outdir: str = OUTDIR, max_files: int = None, mp: bool = False):

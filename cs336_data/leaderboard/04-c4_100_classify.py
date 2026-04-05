@@ -11,8 +11,8 @@ from transformers import AutoTokenizer
 
 TOKENIZER = AutoTokenizer.from_pretrained("gpt2")
 
-DATA_DIR = "/data/c-sniderb/a4-leaderboard/03-exact-deduped"
-OUT_DIR = "/data/c-sniderb/a4-leaderboard/04-classified-bucketed"
+DATA_DIR = "data/03-deduped"
+OUT_DIR = "data/04-classified"
 
 MAX_FILES = 10_000
 CHUNK_SIZE = 30
@@ -75,7 +75,7 @@ def process_file_chunk(filepaths: list[str], out_dir: str, brackets: dict[float,
 
     for filepath in filepaths:
         outpath = os.path.join(out_dir, os.path.basename(filepath))
-        stats_list.append(process_file(filepath, outpath, brackets))
+        stats_list.append(process_file(filepath, outpath, brackets, tokenize=tokenize))
 
     return stats_list
 
@@ -191,6 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--tokenize", action="store_true")
     args = parser.parse_args()
 
+    threshold = args.threshold
     if args.thresholded:
         threshold = args.threshold or 0.1
 
@@ -201,6 +202,6 @@ if __name__ == "__main__":
         chunk_size=args.chunk_size,
         single=args.single,
         mp=args.mp,
-        threshold=args.threshold,
+        threshold=threshold,
         tokenize=args.tokenize,
     )

@@ -1,7 +1,9 @@
 import argparse
 import gzip
 import os
+import re
 
+from nltk.tokenize import word_tokenize
 from warcio.archiveiterator import ArchiveIterator
 from warcio.warcwriter import WARCWriter
 
@@ -14,6 +16,51 @@ from cs336_data.gopher_quality_filters import gopher_quality_filter
 DEFAULT_WARC_PATH = abs_or_relative_path("data/wiki/unfiltered_positive_samples.warc.gz")
 DEFAULT_OUTPUT_PATH = "data/wiki/positive_samples.warc.gz"
 DEFAULT_TRAINING_SAMPLES_PATH = "data/wiki/train_positive.txt"
+
+NOISE_LINES = {
+    "Jump to content",
+    "Main menu",
+    "Navigation",
+    "Contribute",
+    "Search",
+    "Contents",
+    "References",
+    "External links",
+    "Notes",
+    "Further reading",
+    "See also",
+    "Create account",
+    "Log in",
+    "Donate",
+    "Personal tools",
+}
+
+
+def normalize_wiki_text(text: str) -> str:
+    cleaned_lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line in NOISE_LINES:
+            continue
+        if "Wikipedia The Free Encyclopedia" in line:
+            continue
+        if line.startswith("•"):
+            continue
+        if re.fullmatch(r"\(?[Tt]op\)?", line):
+            continue
+        if re.match(r"^\d+(\.\d+)*\s+\S+", line):
+            continue
+        if re.fullmatch(r"[\W\d_]+", line):
+            continue
+
+        # Strip inline citation markers before token-based filtering.
+        line = re.sub(r"\[\d+(?:,\s*\d+)*\]", "", line)
+        cleaned_lines.append(line)
+
+    tokens = [token for token in word_tokenize(" ".join(cleaned_lines)) if any(char.isalpha() for char in token)]
+    return " ".join(tokens)
 
 
 def main():
@@ -58,7 +105,7 @@ def main():
                 continue
 
             html_bytes = record.content_stream().read()
-            text = extract_text_from_html_bytes(html_bytes)
+            text = normalize_wiki_text(extract_text_from_html_bytes(html_bytes))
             if not text.strip():
                 continue
 

@@ -28,7 +28,7 @@ def sample_positive_urls(inpath: str, outpath: str, max_urls: int = 1e1, max_to_
             if len(reservoir) < max_urls:
                 reservoir.append(url)
             else:
-                r = random.randint(0, len(reservoir))
+                r = random.randint(0, processed - 1)
                 if r < max_urls:
                     reservoir[r] = url
 

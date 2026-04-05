@@ -18,7 +18,16 @@ def main(
     with open(input_path) as f:
         lines = f.readlines()
 
-    valid_size = valid_size if valid_size else int(len(lines) * valid_ratio)
+    if not lines:
+        raise ValueError(f"No training examples found in {input_path}")
+
+    if valid_size is None:
+        valid_size = int(len(lines) * valid_ratio)
+
+    if len(lines) > 1:
+        valid_size = max(1, min(valid_size, len(lines) - 1))
+    else:
+        valid_size = 1
 
     with open(train_path, "w") as f:
         f.writelines(lines[:-valid_size])
@@ -39,4 +48,4 @@ if __name__ == "__main__":
     parser.add_argument("--valid-ratio", type=float, default=VALID_RATIO)
     args = parser.parse_args()
 
-    main(args.input_path, args.train_path, args.valid_path, args.valid_size, args.valid_ratio, args.seed)
+    main(args.input_path, args.train_path, args.valid_path, args.valid_size, args.valid_ratio)

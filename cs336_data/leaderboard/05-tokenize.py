@@ -5,8 +5,8 @@ import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-INPUT_DIR = "/data/c-sniderb/a4-leaderboard/04-classified-thresholded"
-OUTPUT_PATH = "/data/c-sniderb/a4-leaderboard/tokenized-thresholded.bin"
+INPUT_DIR = "data/04-classified"
+OUTPUT_PATH = "data/tokens.bin"
 TOKENIZER = AutoTokenizer.from_pretrained("gpt2")
 
 
@@ -25,6 +25,7 @@ def main(input_dir: str, output_path: str):
     for filepath in tqdm(input_paths, desc="Reading docs"):
         with open(filepath) as f:
             docs.extend(f.read().split("\n\n---END_OF_DOC---\n\n"))
+    docs = [doc for doc in docs if doc.strip()]
 
     pool = multiprocessing.Pool(multiprocessing.cpu_count())
     chunksize = 100
@@ -41,7 +42,7 @@ def main(input_dir: str, output_path: str):
     pool.join()
 
     all_ids = [token_id for sublist in results for token_id in sublist]
-    print(f"Tokenized and encoded {len(input_paths)} docs into {len(all_ids)} tokens")
+    print(f"Tokenized and encoded {len(docs)} docs from {len(input_paths)} files into {len(all_ids)} tokens")
     ids_array = np.array(all_ids, dtype=np.uint16)
     ids_array.tofile(output_path)
     print(f"Saved tokenized docs to {output_path}")
