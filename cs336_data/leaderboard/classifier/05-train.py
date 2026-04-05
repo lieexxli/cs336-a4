@@ -1,17 +1,26 @@
+import argparse
 import fasttext
 
+CLASSIFIER_DIR = "data/leaderboard/classifier"
 
-def main():
+
+def main(classifier_dir: str = CLASSIFIER_DIR):
+    train_path = f"{classifier_dir}/quality.train"
+    valid_path = f"{classifier_dir}/quality.valid"
+    model_path = f"{classifier_dir}/quality.bin"
+
     model = fasttext.train_supervised(
-        input="/data/c-sniderb/a4-leaderboard/classifier/quality.train",
+        input=train_path,
         epoch=5,
         lr=0.2,
-        # loss="hs",
-        # wordNgrams=3,
     )
-    model.save_model("/data/c-sniderb/a4-leaderboard/classifier/quality.bin")
-    print(model.test("/data/c-sniderb/a4-leaderboard/classifier/quality.valid", k=1))
+    model.save_model(model_path)
+    print(model.test(valid_path, k=1))
+    print(f"Model saved to {model_path}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--classifier-dir", type=str, default=CLASSIFIER_DIR)
+    args = parser.parse_args()
+    main(classifier_dir=args.classifier_dir)

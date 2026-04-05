@@ -1,9 +1,14 @@
 import os
 import fasttext
 
-MODEL_PATH = (
-    "/data/classifiers/lid.176.bin" if os.path.exists("/data/classifiers/lid.176.bin") else "../classifiers/lid.176.bin"
-)
+def _find_model(filename: str) -> str:
+    for path in ["/data/classifiers", "data/classifiers", "../classifiers"]:
+        full = os.path.join(path, filename)
+        if os.path.exists(full):
+            return full
+    raise FileNotFoundError(f"{filename} not found. Put it in data/classifiers/, /data/classifiers/, or ../classifiers/")
+
+MODEL_PATH = _find_model("lid.176.bin")
 
 model = fasttext.load_model(MODEL_PATH)
 

@@ -3,10 +3,8 @@ import random
 import os
 from tqdm import tqdm
 
-DATA_DIR = "/data/c-sniderb/a4-leaderboard/03-exact-deduped"
-OUT_DIR = os.path.join(DATA_DIR, "..", "classifier")
-OUT_PATH = os.path.join(OUT_DIR, "negatives_train.txt")
-OUT_PATH_VALID = os.path.join(OUT_DIR, "negatives_valid.txt")
+DATA_DIR = "data/leaderboard/03-deduped"
+CLASSIFIER_DIR = "data/leaderboard/classifier"
 
 NUM_TRAIN_EXAMPLES = 28000
 NUM_VALID_EXAMPLES = 500
@@ -15,8 +13,13 @@ NUM_VALID_EXAMPLES = 500
 def main(
     num_train_examples: int = NUM_TRAIN_EXAMPLES,
     num_valid_examples: int = NUM_VALID_EXAMPLES,
+    data_dir: str = DATA_DIR,
+    classifier_dir: str = CLASSIFIER_DIR,
 ):
-    data_filepaths = [os.path.join(DATA_DIR, filepath) for filepath in os.listdir(DATA_DIR)]
+    out_path = os.path.join(classifier_dir, "negatives_train.txt")
+    out_path_valid = os.path.join(classifier_dir, "negatives_valid.txt")
+
+    data_filepaths = [os.path.join(data_dir, filepath) for filepath in os.listdir(data_dir)]
 
     examples_per_file = 0
     while examples_per_file * (examples_per_file * 10) < num_train_examples + num_valid_examples:
@@ -40,27 +43,33 @@ def main(
     if len(train_examples) > num_train_examples:
         train_examples = train_examples[:num_train_examples]
 
-    if not os.path.exists(OUT_DIR):
-        os.makedirs(OUT_DIR)
+    os.makedirs(classifier_dir, exist_ok=True)
 
-    with open(OUT_PATH, "w") as f:
+    with open(out_path, "w") as f:
         for example in train_examples:
             joined_text = example.replace("\n", " ")
             f.write(f"__label__negative {joined_text}\n")
 
-    print(f"Wrote {len(train_examples)} negative examples to {OUT_PATH}")
+    print(f"Wrote {len(train_examples)} negative examples to {out_path}")
 
-    with open(OUT_PATH_VALID, "w") as f:
+    with open(out_path_valid, "w") as f:
         for example in valid_examples:
             joined_text = example.replace("\n", " ")
             f.write(f"__label__negative {joined_text}\n")
 
-    print(f"Wrote {len(valid_examples)} negative examples to {OUT_PATH_VALID}")
+    print(f"Wrote {len(valid_examples)} negative examples to {out_path_valid}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-train-examples", type=int, default=NUM_TRAIN_EXAMPLES)
     parser.add_argument("--num-valid-examples", type=int, default=NUM_VALID_EXAMPLES)
+    parser.add_argument("--data-dir", type=str, default=DATA_DIR)
+    parser.add_argument("--classifier-dir", type=str, default=CLASSIFIER_DIR)
     args = parser.parse_args()
-    main(num_train_examples=args.num_train_examples, num_valid_examples=args.num_valid_examples)
+    main(
+        num_train_examples=args.num_train_examples,
+        num_valid_examples=args.num_valid_examples,
+        data_dir=args.data_dir,
+        classifier_dir=args.classifier_dir,
+    )

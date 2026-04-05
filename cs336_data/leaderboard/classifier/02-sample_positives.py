@@ -2,11 +2,11 @@ import random
 import os
 import argparse
 
-DATA_DIR = "/data/c-sniderb/a4-leaderboard"
-DATA_PATH = os.path.join(DATA_DIR, "paloma_c4_100_domains_validation_text.txt")
-OUT_DIR = os.path.join(DATA_DIR, "classifier")
-OUT_PATH_TRAIN = os.path.join(OUT_DIR, "positives_train.txt")
-OUT_PATH_VALID = os.path.join(OUT_DIR, "positives_valid.txt")
+LEADERBOARD_DIR = "data/leaderboard"
+CLASSIFIER_DIR = os.path.join(LEADERBOARD_DIR, "classifier")
+DATA_PATH = os.path.join(CLASSIFIER_DIR, "paloma_c4_100_domains_validation_text.txt")
+OUT_PATH_TRAIN = os.path.join(CLASSIFIER_DIR, "positives_train.txt")
+OUT_PATH_VALID = os.path.join(CLASSIFIER_DIR, "positives_valid.txt")
 
 NUM_TRAIN_EXAMPLES = 28000
 NUM_VALID_EXAMPLES = 500
@@ -14,7 +14,7 @@ NUM_VALID_EXAMPLES = 500
 
 def main(
     data_path: str = DATA_PATH,
-    out_dir: str = OUT_DIR,
+    out_dir: str = CLASSIFIER_DIR,
     out_path_train: str = OUT_PATH_TRAIN,
     out_path_valid: str = OUT_PATH_VALID,
     num_train_examples: int = NUM_TRAIN_EXAMPLES,
@@ -57,5 +57,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-train-examples", type=int, default=NUM_TRAIN_EXAMPLES)
     parser.add_argument("--num-valid-examples", type=int, default=NUM_VALID_EXAMPLES)
+    parser.add_argument("--classifier-dir", type=str, default=CLASSIFIER_DIR)
     args = parser.parse_args()
-    main(num_train_examples=args.num_train_examples, num_valid_examples=args.num_valid_examples)
+    classifier_dir = args.classifier_dir
+    main(
+        data_path=os.path.join(classifier_dir, "paloma_c4_100_domains_validation_text.txt"),
+        out_dir=classifier_dir,
+        out_path_train=os.path.join(classifier_dir, "positives_train.txt"),
+        out_path_valid=os.path.join(classifier_dir, "positives_valid.txt"),
+        num_train_examples=args.num_train_examples,
+        num_valid_examples=args.num_valid_examples,
+    )
