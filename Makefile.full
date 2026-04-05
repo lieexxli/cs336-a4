@@ -16,7 +16,7 @@ FULL_QUALITY_B_STAMP := $(ROUTE_STAMP_DIR)/quality-b.$(FULL_TRAIN_EXAMPLES)-$(FU
 FULL_STEP5_STAMP := $(ROUTE_STAMP_DIR)/step5.$(FULL_WET_FILES)-$(FULL_TRAIN_EXAMPLES)-$(FULL_VALID_EXAMPLES).done
 
 .PHONY: help show-config all common-prep common-prep-core download-cc download-cc-core quality-a quality-a-core \
-	pipeline-1-3 pipeline-1-3-core quality-b quality-b-core pipeline-4-5 pipeline-4-5-core reset
+	pipeline-1-3 pipeline-1-3-core quality-b quality-b-core pipeline-4-5 pipeline-4-5-core test test-core reset
 
 help:
 	@printf "%s\n" \
@@ -35,8 +35,12 @@ help:
 	  "  pipeline-1-3   Run leaderboard Step 1 to Step 3 with --mp" \
 	  "  quality-b      Train the leaderboard quality classifier B (28000/500 by default)" \
 	  "  pipeline-4-5   Run leaderboard Step 4 to Step 5 with --mp" \
+	  "  test           Run pytest with CS336_QUALITY_MODEL_PATH pinned to artifacts/full/out/models/quality.bin" \
 	  "  reset          Remove artifacts/full while keeping shared prep and cache" \
-	  "  show-config    Print the full-route parameters"
+	  "  show-config    Print the full-route parameters" \
+	  "" \
+	  "Optional vars:" \
+	  "  PYTEST_ARGS='tests/test_quality.py -v'  Override the pytest target list"
 
 show-config:
 	@printf "%s\n" \
@@ -44,7 +48,8 @@ show-config:
 	  "FULL_WET_FILES=$(FULL_WET_FILES)" \
 	  "FULL_MAX_URLS=$(FULL_MAX_URLS)" \
 	  "FULL_TRAIN_EXAMPLES=$(FULL_TRAIN_EXAMPLES)" \
-	  "FULL_VALID_EXAMPLES=$(FULL_VALID_EXAMPLES)"
+	  "FULL_VALID_EXAMPLES=$(FULL_VALID_EXAMPLES)" \
+	  "PYTEST_ARGS=$(PYTEST_ARGS)"
 
 all:
 	@route_start=$$(date +%s)
@@ -87,6 +92,13 @@ pipeline-4-5:
 	@$(call run_make_timed,full/pipeline-4-5,pipeline-4-5-core)
 
 pipeline-4-5-core: $(FULL_STEP5_STAMP)
+
+test:
+	@$(call run_make_timed,full/test,test-core)
+
+test-core: setup classifiers quality-a-core
+	CS336_QUALITY_MODEL_PATH=$(ROUTE_OUT_MODELS_DIR)/quality.bin \
+	  $(UV_RUN) pytest $(PYTEST_ARGS)
 
 reset:
 	rm -rf $(ROUTE_ROOT)

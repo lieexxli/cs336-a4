@@ -13,7 +13,7 @@ from cs336_data.language_identification import identify_language
 from cs336_data.harmful_content import classify_nsfw, classify_toxic_speech
 from cs336_data.gopher_quality_filters import gopher_quality_filter
 
-DEFAULT_WARC_PATH = abs_or_relative_path("data/wiki/unfiltered_positive_samples.warc.gz")
+DEFAULT_WARC_PATH = "data/wiki/unfiltered_positive_samples.warc.gz"
 DEFAULT_OUTPUT_PATH = "data/wiki/positive_samples.warc.gz"
 DEFAULT_TRAINING_SAMPLES_PATH = "data/wiki/train_positive.txt"
 
@@ -71,6 +71,7 @@ def main():
         "--train-outpath", default=DEFAULT_TRAINING_SAMPLES_PATH, help="Where the training examples should be written"
     )
     args = parser.parse_args()
+    args.warc_path = abs_or_relative_path(args.warc_path)
 
     # Prepare for progress reporting
     total_bytes = os.path.getsize(args.warc_path)

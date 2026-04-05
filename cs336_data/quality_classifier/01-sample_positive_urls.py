@@ -5,7 +5,7 @@ import random
 from cs336_data.common import abs_or_relative_path
 
 MAX_URLS = 1e5
-INPATH = abs_or_relative_path("data/wiki/enwiki-20240420-extracted_urls.txt.gz")
+INPATH = "data/wiki/enwiki-20240420-extracted_urls.txt.gz"
 OUTPATH = "data/wiki/subsampled_positive_urls.txt"
 
 
@@ -48,7 +48,9 @@ def parse_args():
     parser.add_argument("--max-to-process", type=int, default=None)
     parser.add_argument("--inpath", type=str, default=INPATH)
     parser.add_argument("--outpath", type=str, default=OUTPATH)
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.inpath = abs_or_relative_path(args.inpath)
+    return args
 
 
 if __name__ == "__main__":

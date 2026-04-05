@@ -5,6 +5,7 @@ SHELL := /bin/bash
 
 UV_RUN ?= uv run
 WGET ?= wget
+PYTEST_ARGS ?= tests/ -v
 
 ROUTE ?= default
 ROUTE_ROOT ?= artifacts/$(ROUTE)

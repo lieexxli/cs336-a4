@@ -92,7 +92,23 @@ make -f Makefile.full quality-b FULL_TRAIN_EXAMPLES=5000 FULL_VALID_EXAMPLES=200
 make -f Makefile.full all FULL_WET_FILES=100 FULL_TRAIN_EXAMPLES=5000 FULL_VALID_EXAMPLES=200
 ```
 
-#### 5. 清理某条路线自己的产物
+#### 5. 用路线自带的 test 入口跑 pytest
+
+优先用下面这两个入口，而不是直接手写 `pytest`。它们会显式固定 `CS336_QUALITY_MODEL_PATH`，避免测试时误用另一条路线的分类器 A。
+
+```bash
+make -f Makefile.small test
+make -f Makefile.full test
+```
+
+如果只想测局部，也可以覆盖 `PYTEST_ARGS`：
+
+```bash
+make -f Makefile.small test PYTEST_ARGS='tests/test_quality.py -v'
+make -f Makefile.full test PYTEST_ARGS='tests/test_pii.py -v'
+```
+
+#### 6. 清理某条路线自己的产物
 
 ```bash
 make -f Makefile.small reset
@@ -106,14 +122,14 @@ make -f Makefile.full reset
 - `data/paloma/`
 - `data/commoncrawl/cache/`
 
-#### 6. 查看完整帮助
+#### 7. 查看完整帮助
 
 ```bash
 make -f Makefile.small help
 make -f Makefile.full help
 ```
 
-#### 7. full 中断后怎么续跑
+#### 8. full 中断后怎么续跑
 
 `Makefile.full` 的 Common Crawl 下载现在会把文件先写到共享缓存里的 `.part` 临时文件，下载并校验通过后再原子改名为正式缓存文件，并额外写一个 `.ok` 标记。
 
@@ -874,9 +890,34 @@ uv run torchrun --standalone --nproc_per_node=2 \
 
 ### 运行测试
 
+优先用路线自带的 `make` 入口。这样会显式固定测试使用的质量分类器 A 路径，不会在 `small` / `full` 之间猜模型文件。
+
+```bash
+make -f Makefile.small test
+make -f Makefile.full test
+```
+
+如果要只跑某个测试文件：
+
+```bash
+make -f Makefile.small test PYTEST_ARGS='tests/test_quality.py -v'
+make -f Makefile.full test PYTEST_ARGS='tests/test_pii.py -v'
+```
+
+如果你确实想直接手写 `pytest`，至少把 `CS336_QUALITY_MODEL_PATH` 一起带上：
+
+```bash
+CS336_QUALITY_MODEL_PATH=artifacts/small/out/models/quality.bin uv run pytest tests/ -v
+CS336_QUALITY_MODEL_PATH=artifacts/full/out/models/quality.bin uv run pytest tests/ -v
+```
+
+不带环境变量直接跑：
+
 ```bash
 uv run pytest tests/ -v
 ```
+
+这种写法会回退到代码里的默认搜索顺序，只适合你明确知道当前本地有哪些模型产物。
 
 如果只想测局部：
 

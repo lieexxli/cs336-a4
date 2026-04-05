@@ -7,7 +7,7 @@ from warcio.archiveiterator import ArchiveIterator
 from cs336_data.common import abs_or_relative_path
 from cs336_data.extract_text import extract_text_from_html_bytes
 
-DEFAULT_WARC_PATH = abs_or_relative_path("data/CC/example.warc.gz")
+DEFAULT_WARC_PATH = "data/CC/example.warc.gz"
 DEFAULT_TRAIN_OUTPUT = "data/wiki/train_negative.txt"
 
 
@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--train-output", default=DEFAULT_TRAIN_OUTPUT, help="Outfile for the training examples")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible sampling")
     args = parser.parse_args()
+    args.warc_path = abs_or_relative_path(args.warc_path)
 
     random.seed(args.seed)
     total_bytes = os.path.getsize(args.warc_path)  # Progress reporting
