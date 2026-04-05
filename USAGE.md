@@ -220,6 +220,71 @@ cs336-a4/
 8. 如果你不想手动逐条敲命令，可以直接使用 `Makefile.small` 或 `Makefile.full`；下面的 shell 命令更多是给排障和分步执行用的。
 9. 这两个 `Makefile` 不再共用中间产物目录；它们只共享 `data/` 下的外部资源和 Common Crawl 下载缓存。
 
+### 1.5 换机时怎么备份和恢复
+
+不建议把整个仓库目录直接同步到 Google Drive。这个仓库包含很多文件，尤其是 `.venv`、`.git`、测试缓存等目录；在 Colab 的 `MyDrive` 挂载盘上复制整棵目录会很慢。
+
+更推荐的做法是：
+
+1. 代码走 `git clone`
+2. 只把本地最贵的状态单独打包备份
+
+推荐备份的内容：
+
+- `data/classifiers/`
+- `data/wiki/`
+- `data/paloma/`
+- `data/commoncrawl/`
+- `artifacts/small/`
+- `artifacts/full/`
+
+这些目录包含：
+
+- 外部下载的 fastText 模型
+- Wikipedia URL 列表
+- Paloma validation `.bin`
+- Common Crawl 路径清单和下载缓存
+- small / full 两条路线已经生成的中间产物与分类器模型
+
+不建议备份的内容：
+
+- `.git/`
+- `.venv/`
+- `cs336-basics/.venv/`
+- `.pytest_cache/`
+- `.codex`
+
+在 Colab 里，可以这样把状态包保存到 Google Drive：
+
+```bash
+cd /content/cs336-a4
+tar -cf /content/cs336-a4-state.tar \
+  data/classifiers \
+  data/wiki \
+  data/paloma \
+  data/commoncrawl \
+  artifacts/small \
+  artifacts/full
+cp /content/cs336-a4-state.tar /content/drive/MyDrive/cs336-a4-state.tar
+```
+
+恢复时：
+
+```bash
+git clone <your-repo-url> /content/cs336-a4
+cd /content/cs336-a4
+tar -xf /content/drive/MyDrive/cs336-a4-state.tar
+uv sync
+python -m nltk.downloader punkt_tab
+```
+
+恢复完成后，你就能继续使用：
+
+- `make -f Makefile.small ...`
+- `make -f Makefile.full ...`
+
+如果 `artifacts/` 里已经有对应路线的产物，`make` 会按现有 stamp 和参数检查逻辑优先复用，而不是从零重跑。
+
 ---
 
 ## 2. 全量所需硬件配置
