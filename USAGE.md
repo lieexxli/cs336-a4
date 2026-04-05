@@ -9,37 +9,87 @@
 
 这份文档按这个顺序组织：
 
-1. 先做通用准备
-2. 如果只是验证流程，走“小样本跑通”
-3. 如果要升级到更多数据，再走“全量复现”
+1. 先看“全量所需硬件配置”，判断本机是否适合全量
+2. 做一次“通用准备”
+3. 然后二选一：
+   - 只想验证流程：走“小样本跑通”
+   - 想直接完整复现：直接走“全量复现”
 
 所有命令默认都在仓库根目录执行：`/content/cs336-a4`
 
 ---
 
-## 1. 小样本产物能否复用到全量
+## 1. 全量所需硬件配置
 
-| 产物 | 全量时能否直接复用 | 说明 |
-|---|---|---|
-| `uv sync` 安装好的环境 | 可以 | 直接复用 |
-| `nltk` 的 `punkt_tab` | 可以 | 直接复用 |
-| `data/classifiers/*.bin` | 可以 | NSFW、毒性、语种识别模型都可直接复用 |
-| `data/wiki/titles.gz` | 可以 | 只是原始标题 dump |
-| `data/wiki/enwiki-20240420-extracted_urls.txt.gz` | 可以 | 只是 Wikipedia URL 列表 |
-| `data/paloma/tokenized_paloma_c4_100_domains_validation.bin` | 可以 | Leaderboard 分类器正例来源，可直接复用 |
-| `data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin` | 可以 | 只是兼容软链，可直接复用 |
-| `out/models/quality.bin` | 可以，但通常没必要 | 这是测试用质量分类器 A，不参与最终主 pipeline |
-| `data/CC/example.warc.gz` | 可以，但只够小样本 | 负例采样 smoke test 可继续用；不代表全量数据 |
-| `data/raw/*.warc.wet.gz`（你的小样本 WET） | 不可以 | 全量需要重新下载更多 WET |
-| `data/01-english`、`data/02-heuristics`、`data/03-deduped`、`data/04-classified` | 不可以 | 这些都是对小样本 CC 的中间结果，全量必须重跑 |
-| `data/leaderboard/classifier/quality.bin`（小样本训练） | 能临时用，但正式全量建议重训 | 技术上可用于 Step 4，但推荐用更大的 Step 3 输出重新训练 |
-| `data/tokens.bin`（小样本） | 不可以 | 全量必须重新 tokenization |
+如果你的目标是“做到 `data/tokens.bin` 为止，不做最后语言模型训练”，那么：
 
-一句话总结：
+- **GPU 不是刚需**
+- **CPU、内存、磁盘才是刚需**
 
-- 通用资源、外部模型、Paloma、环境准备都可以复用。
-- 所有基于小样本 Common Crawl 生成的中间产物，都不能当作全量结果。
-- Leaderboard 分类器 B 的小样本模型可以先拿来验证 Step 4 接线，但正式全量建议重训。
+推荐按下面几档理解：
+
+| 场景 | CPU | 内存 | 磁盘 | GPU | 备注 |
+|---|---:|---:|---:|---:|---|
+| 小样本跑通 | 8-16 核 | 32-64 GB | 100-300 GB SSD | 不需要 | 用来验证所有步骤都能执行 |
+| 全量训练前 pipeline 最低可用 | 32 核 | 128 GB | 2 TB NVMe | 不需要 | 能做，但 Step 3 内存压力偏大 |
+| 全量训练前 pipeline 推荐单机 | 48-64 核 | 256 GB | 4 TB NVMe | 不需要 | 更稳妥，适合保留更多中间产物 |
+| 如果连最后 LM 训练也要做 | 48-64 核 | 256 GB | 4 TB NVMe | `2 x 40GB+` | 更接近默认训练脚本配置 |
+
+### 1.1 为什么全量主要吃 CPU / RAM / SSD
+
+- Step 1 语种过滤、Step 2 启发式过滤、Step 4 分类器过滤、Step 5 tokenize，基本都是 CPU 任务。
+- 两个 fastText 质量分类器训练也主要吃 CPU，不依赖 GPU。
+- 真正最容易成为瓶颈的是 Step 3 `exact_dedupe`：
+  - 当前实现会把大量行哈希放进 Python `dict`
+  - 这一步对 **内存** 最敏感
+  - 也是全链路最不适合小内存机器的一步
+
+### 1.2 磁盘为什么要至少 2 TB，推荐 4 TB
+
+按文档默认“5,000 个 WET 文件”的量级，经验上：
+
+| 阶段 | 大小估算 |
+|---|---|
+| 原始 WET 压缩文件 | ~1 TB |
+| Step 1 后 | ~140 GB |
+| Step 2-3 后 | ~40 GB |
+| Step 4 后 | ~15 GB |
+| 最终 `tokens.bin` | ~12.8 GB |
+
+如果你愿意在每一步完成后主动删除前一阶段的中间产物：
+
+- `2 TB NVMe` 可以作为下限
+
+如果你希望同时保留：
+
+- 原始 WET
+- Step 1/2/3/4 中间结果
+- 最终 `tokens.bin`
+
+那更现实的是：
+
+- `4 TB NVMe`
+
+不建议用机械硬盘做这套流程的主存储。
+
+### 1.3 如果以后还想做最终 LM 训练
+
+这一步不属于本文核心，但为了避免低估资源，这里单独说明。
+
+`cs336-basics` 当前默认训练配置大致是：
+
+- 约 `162M` 参数
+- `context_length = 512`
+- `train_batch_size = 128`
+- `train_steps = 100000`
+- 默认脚本按 `2 GPU` 写
+
+所以如果你还想继续往下做最终 LM 训练：
+
+- 推荐 `2 x 40GB` 或更大显存的 GPU
+- `2 x 24GB` 不是完全不能试，但通常需要你自己改 batch size 或训练参数
+
+如果你只做到 `data/tokens.bin`，就不需要专门配 GPU。
 
 ---
 
@@ -359,39 +409,36 @@ uv run python cs336_data/leaderboard/05-tokenize.py \
 
 ## 4. 版本 B：全量复现
 
-### 4.1 进入全量前，哪些能直接沿用
+### 4.1 适用范围
 
-如果你已经做完“小样本跑通”，以下内容可以直接沿用，不用重做：
+这一节是**独立版全量流程**。
 
-- `uv sync` 安装好的环境
-- `nltk` 数据
-- `data/classifiers/*.bin`
-- `data/wiki/titles.gz`
-- `data/wiki/enwiki-20240420-extracted_urls.txt.gz`
-- `data/paloma/tokenized_paloma_c4_100_domains_validation.bin`
-- `data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin`
+- 只依赖上面的“通用准备”（§ 2）
+- **不依赖**先跑“小样本跑通”（§ 3）
+- 如果你想直接从零做全量，可以直接从这里开始
 
-以下内容建议重做：
+### 4.2 下载全量所需原始数据
 
-- `data/raw/*.warc.wet.gz`
-- `data/01-english`
-- `data/02-heuristics`
-- `data/03-deduped`
-- `data/04-classified`
-- `data/tokens.bin`
-- `data/leaderboard/classifier/quality.*`
-- `data/leaderboard/classifier/quality.bin`
+#### 下载 1 个 WARC 供测试分类器 A 使用
 
-### 4.2 下载更多 Common Crawl 数据
+测试分类器 A 只是作业里的辅助分类器，不参与最终主 pipeline。  
+它的负例只需要少量原始 HTML，所以通常 1 个 WARC 就够了。
 
-#### 如果你还需要训练测试分类器 A
+```bash
+mkdir -p data/CC data/commoncrawl
 
-测试分类器 A 只需要少量 WARC 负例，所以 1 个 WARC 通常就够了。  
-如果你已经有 `data/CC/example.warc.gz`，这里一般不用重下。
+wget -O data/commoncrawl/warc.paths.gz \
+  "https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/warc.paths.gz"
 
-#### 下载更多 WET 给主 pipeline
+first_warc_path=$(zcat data/commoncrawl/warc.paths.gz | head -1)
+wget -O data/CC/example.warc.gz \
+  "https://data.commoncrawl.org/${first_warc_path}"
+```
 
-把下面的 `N` 改成你要处理的 WET 文件数。
+#### 下载更多 WET 供主 pipeline 使用
+
+把下面的 `N` 改成你要处理的 WET 文件数。  
+如果你想对齐文档里的“全量量级”，就把 `N` 设成 `5000`。
 
 ```bash
 mkdir -p data/raw data/commoncrawl
@@ -405,32 +452,11 @@ zcat data/commoncrawl/wet.paths.gz | head -n "${N}" | while read -r wet_path; do
 done
 ```
 
-经验量级：
+### 4.3 从零训练测试质量分类器 A
 
-| 阶段 | 量级估算 |
-|---|---|
-| 原始 5000 个 WET 压缩包 | 约 `1 TB` |
-| Step 1 后 | 约 `140 GB` |
-| Step 2-3 后 | 约 `40 GB` |
-| Step 4 后 | 约 `15 GB` |
-| 最终 `tokens.bin` | 约 `12.8 GB` |
+这套分类器不参与最终主 pipeline，但如果你想把“语言模型训练之前的所有步骤”都做全，这一节也应完成。
 
-### 4.3 测试分类器 A 是否需要重做
-
-通常不需要。
-
-原因：
-
-- 它不参与最终 Leaderboard 主 pipeline
-- 它主要用于作业测试和辅助验证
-- 你已经在小样本路线里训练过一次，就足够证明代码和依赖无误
-
-只有在以下情况才建议重做：
-
-- 你明确想扩大 Wikipedia 正例规模
-- 你想重新比较不同超参数或不同采样策略
-
-如果你确实要放大训练集，可以使用真实随机采样：
+#### Step A1: 从 Wikipedia URL 列表中随机采样正例页面
 
 ```bash
 uv run python cs336_data/quality_classifier/01-sample_positive_urls.py \
@@ -439,12 +465,45 @@ uv run python cs336_data/quality_classifier/01-sample_positive_urls.py \
   --max-urls 100000
 ```
 
-之后重复版本 A 里的分类器 A 流程即可。
+#### Step A2: 下载采样到的 Wikipedia 页面
+
+```bash
+bash cs336_data/quality_classifier/02-download_positive_urls.sh
+```
+
+#### Step A3: 过滤正例
+
+```bash
+uv run python cs336_data/quality_classifier/03-filter_positive_samples.py
+```
+
+#### Step A4: 用 WARC 随机采样负例
+
+```bash
+pos_n=$(wc -l < data/wiki/train_positive.txt)
+uv run python cs336_data/quality_classifier/04-prepare_negative_samples.py \
+  --warc-path data/CC/example.warc.gz \
+  -n "${pos_n}"
+```
+
+#### Step A5: 合并、切分、训练
+
+```bash
+uv run python cs336_data/quality_classifier/05-merge_samples.py --n "${pos_n}"
+uv run python cs336_data/quality_classifier/06-split_train_valid.py
+uv run python cs336_data/quality_classifier/07-train.py
+```
+
+关键产物：
+
+- `data/wiki/quality.train`
+- `data/wiki/quality.valid`
+- `out/models/quality.bin`
 
 ### 4.4 全量运行 Leaderboard Step 1 到 Step 3
 
 如果你在有 SLURM 的集群上跑，可以直接不加 `--single` / `--mp`，脚本会走 submitit。  
-如果你是在本地机器上跑，推荐显式使用 `--mp`。
+如果你是在本地单机上跑，推荐显式加 `--mp`。
 
 #### 本地多进程版本
 
@@ -480,36 +539,46 @@ uv run python cs336_data/leaderboard/03-exact_dedupe.py \
   --outdir /data/output/03-deduped
 ```
 
-### 4.5 用更大的 Step 3 输出重训 Leaderboard 分类器 B
+关键产物：
 
-正式全量推荐重新做这一段。
+- `data/01-english`
+- `data/02-heuristics`
+- `data/03-deduped`
+
+### 4.5 从零训练 Leaderboard 质量分类器 B
+
+这是 Step 4 实际使用的分类器，也是全量版本里必须重新训练的一步。
 
 ```bash
-# Step B1
+# Step B1: 把 Paloma validation.bin 解码成文本
 uv run python cs336_data/leaderboard/classifier/01-val_to_text.py
 
-# Step B2
+# Step B2: 从 Paloma 中采样正例（默认 28,000 train + 500 valid）
 uv run python cs336_data/leaderboard/classifier/02-sample_positives.py
 
-# Step B3
+# Step B3: 从 Step 3 的输出中采样负例
 uv run python cs336_data/leaderboard/classifier/03-select_negatives.py \
   --data-dir data/03-deduped
 
-# Step B4
+# Step B4: 合并成 quality.train / quality.valid
 uv run python cs336_data/leaderboard/classifier/04-merge_samples.py
 
-# Step B5
+# Step B5: 训练分类器
 uv run python cs336_data/leaderboard/classifier/05-train.py
 ```
 
-默认规模是：
+默认规模：
 
 - 训练正例 `28000`
 - 验证正例 `500`
 - 训练负例 `28000`
 - 验证负例 `500`
 
-这套默认值适合“有明显多于 2 个 WET 文件”的情况。
+关键产物：
+
+- `data/leaderboard/classifier/quality.train`
+- `data/leaderboard/classifier/quality.valid`
+- `data/leaderboard/classifier/quality.bin`
 
 ### 4.6 全量运行 Leaderboard Step 4 到 Step 5
 
@@ -597,3 +666,26 @@ uv run pytest tests/test_deduplication.py -v
 ```bash
 bash test_and_make_submission.sh
 ```
+
+---
+
+## 8. 如果你先做过小样本，可复用什么
+
+这一节只是给“先跑过小样本、现在想升级到全量”的读者看的。  
+它不是全量流程的前置条件。
+
+| 产物 | 全量时能否直接复用 | 说明 |
+|---|---|---|
+| `uv sync` 安装好的环境 | 可以 | 直接复用 |
+| `nltk` 的 `punkt_tab` | 可以 | 直接复用 |
+| `data/classifiers/*.bin` | 可以 | NSFW、毒性、语种识别模型都可直接复用 |
+| `data/wiki/titles.gz` | 可以 | 只是原始标题 dump |
+| `data/wiki/enwiki-20240420-extracted_urls.txt.gz` | 可以 | 只是 Wikipedia URL 列表 |
+| `data/paloma/tokenized_paloma_c4_100_domains_validation.bin` | 可以 | Leaderboard 分类器正例来源，可直接复用 |
+| `data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin` | 可以 | 只是兼容软链，可直接复用 |
+| `out/models/quality.bin` | 可以，但通常没必要 | 这是测试用质量分类器 A，不参与最终主 pipeline |
+| `data/CC/example.warc.gz` | 可以，但只够测试分类器 A | 这 1 个 WARC 不代表全量数据 |
+| `data/raw/*.warc.wet.gz`（小样本 WET） | 不可以 | 全量需要重新下载更多 WET |
+| `data/01-english`、`data/02-heuristics`、`data/03-deduped`、`data/04-classified` | 不可以 | 这些都是对小样本 CC 的中间结果，全量必须重跑 |
+| `data/leaderboard/classifier/quality.bin`（小样本训练） | 能临时用，但正式全量建议重训 | 技术上可用于 Step 4，但推荐用更大的 Step 3 输出重新训练 |
+| `data/tokens.bin`（小样本） | 不可以 | 全量必须重新 tokenization |
