@@ -124,10 +124,14 @@ $(PALOMA_BIN): make/build_paloma_bin.py | $(SHARED_STAMP_DIR)/setup.done $(SHARE
 $(ROUTE_PALOMA_LINK): $(PALOMA_BIN) | $(ROUTE_STAMP_DIR)/dirs.done
 	ln -sf $(abspath $(PALOMA_BIN)) $@
 
-$(WARC_PATHS): | $(SHARED_STAMP_DIR)/dirs.done
-	$(WGET) -O $@ \
-	  "https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/warc.paths.gz"
+$(WARC_PATHS): make/fetch_cached.sh | $(SHARED_STAMP_DIR)/dirs.done
+	bash make/fetch_cached.sh \
+	  "https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/warc.paths.gz" \
+	  $@ \
+	  gzip
 
-$(WET_PATHS): | $(SHARED_STAMP_DIR)/dirs.done
-	$(WGET) -O $@ \
-	  "https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/wet.paths.gz"
+$(WET_PATHS): make/fetch_cached.sh | $(SHARED_STAMP_DIR)/dirs.done
+	bash make/fetch_cached.sh \
+	  "https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/wet.paths.gz" \
+	  $@ \
+	  gzip

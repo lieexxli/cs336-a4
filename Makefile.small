@@ -91,26 +91,23 @@ reset:
 $(SMALL_WET_SELECTION): $(WET_PATHS) make/print_gzip_lines.py | $(ROUTE_STAMP_DIR)/dirs.done
 	$(UV_RUN) python make/print_gzip_lines.py $< $(SMALL_WET_FILES) > $@
 
-$(SMALL_CC_STAMP): $(WARC_PATHS) $(SMALL_WET_SELECTION) | $(ROUTE_STAMP_DIR)/dirs.done
+$(SMALL_CC_STAMP): $(WARC_PATHS) $(SMALL_WET_SELECTION) make/fetch_cached.sh | $(ROUTE_STAMP_DIR)/dirs.done
 	rm -rf $(ROUTE_CC_DIR) $(ROUTE_RAW_DIR)
 	mkdir -p $(ROUTE_CC_DIR) $(ROUTE_RAW_DIR) $(CC_CACHE_DIR) $(WET_CACHE_DIR)
 	first_warc_path="$$( $(UV_RUN) python make/print_gzip_lines.py $(WARC_PATHS) 1 )"
-	if [ ! -f $(CC_CACHE_DIR)/example.warc.gz ]; then
-	  $(WGET) -O $(CC_CACHE_DIR)/example.warc.gz \
-	    "https://data.commoncrawl.org/$${first_warc_path}"
-	else
-	  printf "Reusing cached %s\n" "$(CC_CACHE_DIR)/example.warc.gz"
-	fi
+	bash make/fetch_cached.sh \
+	  "https://data.commoncrawl.org/$${first_warc_path}" \
+	  $(CC_CACHE_DIR)/example.warc.gz \
+	  gzip
 	ln -sf $(abspath $(CC_CACHE_DIR))/example.warc.gz $(ROUTE_CC_DIR)/example.warc.gz
 	while read -r wet_path; do
 	  wet_name="$$(basename "$$wet_path")"
 	  cache_file="$(WET_CACHE_DIR)/$${wet_name}"
 	  route_file="$(ROUTE_RAW_DIR)/$${wet_name}"
-	  if [ ! -f "$$cache_file" ]; then
-	    $(WGET) -O "$$cache_file" "https://data.commoncrawl.org/$${wet_path}"
-	  else
-	    printf "Reusing cached %s\n" "$$cache_file"
-	  fi
+	  bash make/fetch_cached.sh \
+	    "https://data.commoncrawl.org/$${wet_path}" \
+	    "$$cache_file" \
+	    gzip
 	  ln -sf $(abspath $(WET_CACHE_DIR))/$${wet_name} "$$route_file"
 	done < $(SMALL_WET_SELECTION)
 	touch $@

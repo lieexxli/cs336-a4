@@ -113,6 +113,16 @@ make -f Makefile.small help
 make -f Makefile.full help
 ```
 
+#### 7. full 中断后怎么续跑
+
+`Makefile.full` 的 Common Crawl 下载现在会把文件先写到共享缓存里的 `.part` 临时文件，下载并校验通过后再原子改名为正式缓存文件，并额外写一个 `.ok` 标记。
+
+这意味着：
+
+- 如果中断发生在 `download-cc` 阶段，重新执行同一个 target 会优先续传 `.part`
+- 只有校验通过的缓存文件才会在后续 rerun 中被复用
+- `artifacts/full/...` 里仍然只保存软链和中间产物，不会重复存一份大文件
+
 这份文档按这个顺序组织：
 
 1. 先看“整体结构”，知道代码、数据、模型分别放在哪里
