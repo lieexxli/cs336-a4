@@ -2,19 +2,27 @@ cs336-basics/output/
 cs336-basics/outputs/
 cs336-basics/wandb/
 
-CC-MAIN-2023-50/
+# Local datasets, downloaded models, and generated artifacts
+data/
+out/
 *.bin
+*.ckpt
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.warc.gz
+*.warc.wet.gz
+
+CC-MAIN-2023-50/
 
 slurm_logs/
 
 *.err
 *.out
 
-out/
-
 nav
 tags
-data/
 
 .DS_Store
 
