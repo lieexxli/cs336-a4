@@ -1,9 +1,15 @@
 import os
 import fasttext
 
+_ENV_PATH = os.environ.get("CS336_LEADERBOARD_CLASSIFIER_PATH")
 _CANDIDATE_PATHS = [
-    "/data/c-sniderb/a4-leaderboard/classifier/quality.bin",  # 集群路径
-    "data/leaderboard/classifier/quality.bin",                 # 个人服务器推荐路径
+    path
+    for path in [
+        _ENV_PATH,
+        "/data/c-sniderb/a4-leaderboard/classifier/quality.bin",  # 集群路径
+        "data/leaderboard/classifier/quality.bin",  # 个人服务器推荐路径
+    ]
+    if path
 ]
 
 def _find_model() -> str:
@@ -13,7 +19,7 @@ def _find_model() -> str:
     raise FileNotFoundError(
         "Leaderboard quality classifier not found. "
         "Train it with leaderboard/classifier/05-train.py and place the output at "
-        "data/leaderboard/classifier/quality.bin"
+        "the path from CS336_LEADERBOARD_CLASSIFIER_PATH or data/leaderboard/classifier/quality.bin"
     )
 
 quality_model = fasttext.load_model(_find_model())

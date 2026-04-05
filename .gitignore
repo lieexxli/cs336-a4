@@ -5,6 +5,7 @@ cs336-basics/wandb/
 # Local datasets, downloaded models, and generated artifacts
 data/
 out/
+artifacts/
 *.bin
 *.ckpt
 *.onnx

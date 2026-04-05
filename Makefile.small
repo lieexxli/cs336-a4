@@ -1,0 +1,218 @@
+ROUTE := small
+include make/common.mk
+
+.DEFAULT_GOAL := help
+
+SMALL_WET_FILES := 2
+SMALL_TRAIN_EXAMPLES := 1000
+SMALL_VALID_EXAMPLES := 100
+
+SMALL_WET_SELECTION := $(ROUTE_COMMONCRAWL_DIR)/wet.paths.txt
+SMALL_CC_STAMP := $(ROUTE_STAMP_DIR)/cc.done
+SMALL_QUALITY_A_STAMP := $(ROUTE_STAMP_DIR)/quality-a.done
+SMALL_STEP3_STAMP := $(ROUTE_STAMP_DIR)/step3.done
+SMALL_QUALITY_B_STAMP := $(ROUTE_STAMP_DIR)/quality-b.done
+SMALL_STEP5_STAMP := $(ROUTE_STAMP_DIR)/step5.done
+
+.PHONY: help show-config all common-prep common-prep-core download-cc download-cc-core quality-a quality-a-core \
+	pipeline-1-3 pipeline-1-3-core quality-b quality-b-core pipeline-4-5 pipeline-4-5-core reset
+
+help:
+	@printf "%s\n" \
+	  "Usage: make -f Makefile.small <target>" \
+	  "" \
+	  "Outputs: artifacts/small/data/... and artifacts/small/out/models/..." \
+	  "Shared cache: data/classifiers/, data/wiki/, data/paloma/, data/commoncrawl/cache/" \
+	  "Note: stage targets print actual elapsed time when they run." \
+	  "" \
+	  "Targets:" \
+	  "  all            Run the full small-sample workflow through artifacts/small/data/tokens.bin" \
+	  "  common-prep    Install deps and prepare shared external resources plus route layout" \
+	  "  download-cc    Cache 1 WARC + 2 WET files, then link them into artifacts/small/data/" \
+	  "  quality-a      Train the assignment test classifier A in artifacts/small/out/models/" \
+	  "  pipeline-1-3   Run leaderboard Step 1 to Step 3 on the small sample" \
+	  "  quality-b      Train the leaderboard quality classifier B (1000/100)" \
+	  "  pipeline-4-5   Run leaderboard Step 4 to Step 5" \
+	  "  reset          Remove artifacts/small while keeping shared prep and cache" \
+	  "  show-config    Print the small-route parameters"
+
+show-config:
+	@printf "%s\n" \
+	  "ROUTE_ROOT=$(ROUTE_ROOT)" \
+	  "SMALL_WET_FILES=$(SMALL_WET_FILES)" \
+	  "SMALL_TRAIN_EXAMPLES=$(SMALL_TRAIN_EXAMPLES)" \
+	  "SMALL_VALID_EXAMPLES=$(SMALL_VALID_EXAMPLES)"
+
+all:
+	@route_start=$$(date +%s)
+	$(call run_make_timed,small/common-prep,common-prep-core)
+	$(call run_make_timed,small/download-cc,download-cc-core)
+	$(call run_make_timed,small/quality-a,quality-a-core)
+	$(call run_make_timed,small/pipeline-1-3,pipeline-1-3-core)
+	$(call run_make_timed,small/quality-b,quality-b-core)
+	$(call run_make_timed,small/pipeline-4-5,pipeline-4-5-core)
+	route_end=$$(date +%s)
+	elapsed=$$((route_end - route_start))
+	printf "<== %s finished in %dm %02ds\n" "small/all" $$((elapsed / 60)) $$((elapsed % 60))
+
+common-prep:
+	@$(call run_make_timed,small/common-prep,common-prep-core)
+
+common-prep-core: setup classifiers wiki-urls paloma route-layout
+
+download-cc:
+	@$(call run_make_timed,small/download-cc,download-cc-core)
+
+download-cc-core: $(SMALL_CC_STAMP)
+
+quality-a:
+	@$(call run_make_timed,small/quality-a,quality-a-core)
+
+quality-a-core: $(SMALL_QUALITY_A_STAMP)
+
+pipeline-1-3:
+	@$(call run_make_timed,small/pipeline-1-3,pipeline-1-3-core)
+
+pipeline-1-3-core: $(SMALL_STEP3_STAMP)
+
+quality-b:
+	@$(call run_make_timed,small/quality-b,quality-b-core)
+
+quality-b-core: $(SMALL_QUALITY_B_STAMP)
+
+pipeline-4-5:
+	@$(call run_make_timed,small/pipeline-4-5,pipeline-4-5-core)
+
+pipeline-4-5-core: $(SMALL_STEP5_STAMP)
+
+reset:
+	rm -rf $(ROUTE_ROOT)
+
+$(SMALL_WET_SELECTION): $(WET_PATHS) make/print_gzip_lines.py | $(ROUTE_STAMP_DIR)/dirs.done
+	$(UV_RUN) python make/print_gzip_lines.py $< $(SMALL_WET_FILES) > $@
+
+$(SMALL_CC_STAMP): $(WARC_PATHS) $(SMALL_WET_SELECTION) | $(ROUTE_STAMP_DIR)/dirs.done
+	rm -rf $(ROUTE_CC_DIR) $(ROUTE_RAW_DIR)
+	mkdir -p $(ROUTE_CC_DIR) $(ROUTE_RAW_DIR) $(CC_CACHE_DIR) $(WET_CACHE_DIR)
+	first_warc_path="$$( $(UV_RUN) python make/print_gzip_lines.py $(WARC_PATHS) 1 )"
+	if [ ! -f $(CC_CACHE_DIR)/example.warc.gz ]; then
+	  $(WGET) -O $(CC_CACHE_DIR)/example.warc.gz \
+	    "https://data.commoncrawl.org/$${first_warc_path}"
+	else
+	  printf "Reusing cached %s\n" "$(CC_CACHE_DIR)/example.warc.gz"
+	fi
+	ln -sf $(abspath $(CC_CACHE_DIR))/example.warc.gz $(ROUTE_CC_DIR)/example.warc.gz
+	while read -r wet_path; do
+	  wet_name="$$(basename "$$wet_path")"
+	  cache_file="$(WET_CACHE_DIR)/$${wet_name}"
+	  route_file="$(ROUTE_RAW_DIR)/$${wet_name}"
+	  if [ ! -f "$$cache_file" ]; then
+	    $(WGET) -O "$$cache_file" "https://data.commoncrawl.org/$${wet_path}"
+	  else
+	    printf "Reusing cached %s\n" "$$cache_file"
+	  fi
+	  ln -sf $(abspath $(WET_CACHE_DIR))/$${wet_name} "$$route_file"
+	done < $(SMALL_WET_SELECTION)
+	touch $@
+
+$(SMALL_QUALITY_A_STAMP): $(SMALL_CC_STAMP) $(NSFW_MODEL) $(TOXIC_MODEL) $(LID_MODEL) make/small_positive_urls.txt \
+  cs336_data/quality_classifier/02-download_positive_urls.sh \
+  cs336_data/quality_classifier/03-filter_positive_samples.py \
+  cs336_data/quality_classifier/04-prepare_negative_samples.py \
+  cs336_data/quality_classifier/05-merge_samples.py \
+  cs336_data/quality_classifier/06-split_train_valid.py \
+  cs336_data/quality_classifier/07-train.py
+	rm -rf $(ROUTE_WIKI_DIR) $(ROUTE_OUT_MODELS_DIR)
+	mkdir -p $(ROUTE_WIKI_DIR) $(ROUTE_OUT_MODELS_DIR)
+	cp make/small_positive_urls.txt $(ROUTE_WIKI_DIR)/subsampled_positive_urls.txt
+	bash cs336_data/quality_classifier/02-download_positive_urls.sh \
+	  $(ROUTE_WIKI_DIR)/subsampled_positive_urls.txt \
+	  $(ROUTE_WIKI_DIR)/unfiltered_positive_samples
+	$(UV_RUN) python cs336_data/quality_classifier/03-filter_positive_samples.py \
+	  --warc-path $(ROUTE_WIKI_DIR)/unfiltered_positive_samples.warc.gz \
+	  --output $(ROUTE_WIKI_DIR)/positive_samples.warc.gz \
+	  --train-outpath $(ROUTE_WIKI_DIR)/train_positive.txt
+	pos_n="$$(wc -l < $(ROUTE_WIKI_DIR)/train_positive.txt)"
+	$(UV_RUN) python cs336_data/quality_classifier/04-prepare_negative_samples.py \
+	  --warc-path $(ROUTE_CC_DIR)/example.warc.gz \
+	  --train-output $(ROUTE_WIKI_DIR)/train_negative.txt \
+	  -n "$${pos_n}"
+	$(UV_RUN) python cs336_data/quality_classifier/05-merge_samples.py \
+	  --train-pos-path $(ROUTE_WIKI_DIR)/train_positive.txt \
+	  --train-neg-path $(ROUTE_WIKI_DIR)/train_negative.txt \
+	  --output-path $(ROUTE_WIKI_DIR)/train_all.txt \
+	  --n "$${pos_n}"
+	$(UV_RUN) python cs336_data/quality_classifier/06-split_train_valid.py \
+	  --input-path $(ROUTE_WIKI_DIR)/train_all.txt \
+	  --train-path $(ROUTE_WIKI_DIR)/quality.train \
+	  --valid-path $(ROUTE_WIKI_DIR)/quality.valid
+	$(UV_RUN) python cs336_data/quality_classifier/07-train.py \
+	  --train-path $(ROUTE_WIKI_DIR)/quality.train \
+	  --valid-path $(ROUTE_WIKI_DIR)/quality.valid \
+	  --model-path $(ROUTE_OUT_MODELS_DIR)/quality.bin
+	touch $@
+
+$(SMALL_STEP3_STAMP): $(SMALL_CC_STAMP) $(NSFW_MODEL) $(TOXIC_MODEL) $(LID_MODEL) \
+  cs336_data/leaderboard/01-language.py \
+  cs336_data/leaderboard/02-heuristics.py \
+  cs336_data/leaderboard/03-exact_dedupe.py
+	rm -rf $(ROUTE_DATA_DIR)/01-english $(ROUTE_DATA_DIR)/02-heuristics $(ROUTE_DATA_DIR)/03-deduped
+	$(UV_RUN) python cs336_data/leaderboard/01-language.py \
+	  --data-dir $(ROUTE_RAW_DIR) \
+	  --out-dir $(ROUTE_DATA_DIR)/01-english \
+	  --single \
+	  --max-files $(SMALL_WET_FILES)
+	$(UV_RUN) python cs336_data/leaderboard/02-heuristics.py \
+	  --data-dir $(ROUTE_DATA_DIR)/01-english \
+	  --out-dir $(ROUTE_DATA_DIR)/02-heuristics \
+	  --single \
+	  --max-files $(SMALL_WET_FILES)
+	$(UV_RUN) python cs336_data/leaderboard/03-exact_dedupe.py \
+	  --data-dir $(ROUTE_DATA_DIR)/02-heuristics \
+	  --outdir $(ROUTE_DATA_DIR)/03-deduped
+	rm -f $(SMALL_QUALITY_B_STAMP) $(SMALL_STEP5_STAMP)
+	touch $@
+
+$(SMALL_QUALITY_B_STAMP): $(SMALL_STEP3_STAMP) $(ROUTE_PALOMA_LINK) \
+  cs336_data/leaderboard/classifier/01-val_to_text.py \
+  cs336_data/leaderboard/classifier/02-sample_positives.py \
+  cs336_data/leaderboard/classifier/03-select_negatives.py \
+  cs336_data/leaderboard/classifier/04-merge_samples.py \
+  cs336_data/leaderboard/classifier/05-train.py
+	rm -rf $(ROUTE_LEADERBOARD_CLASSIFIER_DIR)
+	mkdir -p $(ROUTE_LEADERBOARD_CLASSIFIER_DIR)
+	ln -sf $(abspath $(PALOMA_BIN)) $(ROUTE_PALOMA_LINK)
+	$(UV_RUN) python cs336_data/leaderboard/classifier/01-val_to_text.py \
+	  --leaderboard-dir $(ROUTE_LEADERBOARD_DIR) \
+	  --classifier-dir $(ROUTE_LEADERBOARD_CLASSIFIER_DIR)
+	$(UV_RUN) python cs336_data/leaderboard/classifier/02-sample_positives.py \
+	  --classifier-dir $(ROUTE_LEADERBOARD_CLASSIFIER_DIR) \
+	  --num-train-examples $(SMALL_TRAIN_EXAMPLES) \
+	  --num-valid-examples $(SMALL_VALID_EXAMPLES)
+	$(UV_RUN) python cs336_data/leaderboard/classifier/03-select_negatives.py \
+	  --data-dir $(ROUTE_DATA_DIR)/03-deduped \
+	  --classifier-dir $(ROUTE_LEADERBOARD_CLASSIFIER_DIR) \
+	  --num-train-examples $(SMALL_TRAIN_EXAMPLES) \
+	  --num-valid-examples $(SMALL_VALID_EXAMPLES)
+	$(UV_RUN) python cs336_data/leaderboard/classifier/04-merge_samples.py \
+	  --classifier-dir $(ROUTE_LEADERBOARD_CLASSIFIER_DIR)
+	$(UV_RUN) python cs336_data/leaderboard/classifier/05-train.py \
+	  --classifier-dir $(ROUTE_LEADERBOARD_CLASSIFIER_DIR)
+	rm -f $(SMALL_STEP5_STAMP)
+	touch $@
+
+$(SMALL_STEP5_STAMP): $(SMALL_STEP3_STAMP) $(SMALL_QUALITY_B_STAMP) \
+  cs336_data/leaderboard/04-c4_100_classify.py \
+  cs336_data/leaderboard/05-tokenize.py \
+  cs336_data/leaderboard/classifier/c4_100_classifier.py
+	rm -rf $(ROUTE_DATA_DIR)/04-classified $(ROUTE_TOKENS_BIN)
+	CS336_LEADERBOARD_CLASSIFIER_PATH=$(ROUTE_LEADERBOARD_CLASSIFIER_DIR)/quality.bin \
+	  $(UV_RUN) python cs336_data/leaderboard/04-c4_100_classify.py \
+	    --data-dir $(ROUTE_DATA_DIR)/03-deduped \
+	    --out-dir $(ROUTE_DATA_DIR)/04-classified \
+	    --single \
+	    --max-files $(SMALL_WET_FILES)
+	$(UV_RUN) python cs336_data/leaderboard/05-tokenize.py \
+	  --input-dir $(ROUTE_DATA_DIR)/04-classified \
+	  --output-path $(ROUTE_TOKENS_BIN)
+	touch $@

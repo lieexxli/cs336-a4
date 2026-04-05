@@ -4,8 +4,114 @@
 
 | 路线 | 目标 | 适合场景 | 典型产物 |
 |---|---|---|---|
-| 小样本跑通 | 先验证所有数据处理和分类器训练步骤都能在本地走通 | 本地磁盘有限，先做 smoke test | `out/models/quality.bin`、`data/leaderboard/classifier/quality.bin`、`data/tokens.bin` |
-| 全量复现 | 用更多 Common Crawl 数据重跑正式数据管线 | 准备真正做大规模过滤或最终训练 | 更大的 `data/01-english` ~ `data/04-classified`、正式版 `data/tokens.bin` |
+| 小样本跑通 | 先验证所有数据处理和分类器训练步骤都能在本地走通 | 本地磁盘有限，先做 smoke test | `artifacts/small/out/models/quality.bin`、`artifacts/small/data/leaderboard/classifier/quality.bin`、`artifacts/small/data/tokens.bin` |
+| 全量复现 | 用更多 Common Crawl 数据重跑正式数据管线 | 准备真正做大规模过滤或最终训练 | 更大的 `artifacts/full/data/01-english` ~ `artifacts/full/data/04-classified`、正式版 `artifacts/full/data/tokens.bin` |
+
+如果你想让人类或 AI 直接“一键按路线执行”，优先用这两个入口：
+
+```bash
+make -f Makefile.small all
+make -f Makefile.full all
+```
+
+这两个入口现在会在终端里打印每个阶段的实际耗时，以及整条路线的总耗时。
+
+查看可用分步 target：
+
+```bash
+make -f Makefile.small help
+make -f Makefile.full help
+```
+
+### Make 快速上手
+
+如果你准备用 `make` 驱动整条流程，最常用的是下面这些命令。
+
+#### 1. 一键跑完整路线
+
+```bash
+make -f Makefile.small all
+make -f Makefile.full all
+```
+
+- `small` 的最终产物在 `artifacts/small/...`
+- `full` 的最终产物在 `artifacts/full/...`
+- 两条路线共享 `data/` 下的外部资源和 Common Crawl 下载缓存
+
+#### 2. 先看当前参数
+
+```bash
+make -f Makefile.small show-config
+make -f Makefile.full show-config
+```
+
+如果你要改全量参数，也可以直接这样看：
+
+```bash
+make -f Makefile.full show-config FULL_WET_FILES=100 FULL_TRAIN_EXAMPLES=5000 FULL_VALID_EXAMPLES=200
+```
+
+#### 3. 分阶段单独执行
+
+这两个 `Makefile` 都支持相同的一组阶段 target：
+
+```bash
+make -f Makefile.small common-prep
+make -f Makefile.small download-cc
+make -f Makefile.small quality-a
+make -f Makefile.small pipeline-1-3
+make -f Makefile.small quality-b
+make -f Makefile.small pipeline-4-5
+```
+
+全量路线同理：
+
+```bash
+make -f Makefile.full common-prep
+make -f Makefile.full download-cc
+make -f Makefile.full quality-a
+make -f Makefile.full pipeline-1-3
+make -f Makefile.full quality-b
+make -f Makefile.full pipeline-4-5
+```
+
+适合的场景：
+
+- 只想先准备共享资源：跑 `common-prep`
+- 只想确认 Common Crawl 下载/缓存逻辑：跑 `download-cc`
+- Step 3 改完代码后只想从主 pipeline 中段继续：跑 `pipeline-1-3`
+- 只想重训分类器 B：跑 `quality-b`
+
+#### 4. 给 full 覆盖参数
+
+参数覆盖可以加在任意 target 后面，不只 `all`：
+
+```bash
+make -f Makefile.full download-cc FULL_WET_FILES=100
+make -f Makefile.full quality-b FULL_TRAIN_EXAMPLES=5000 FULL_VALID_EXAMPLES=200
+make -f Makefile.full all FULL_WET_FILES=100 FULL_TRAIN_EXAMPLES=5000 FULL_VALID_EXAMPLES=200
+```
+
+#### 5. 清理某条路线自己的产物
+
+```bash
+make -f Makefile.small reset
+make -f Makefile.full reset
+```
+
+`reset` 只会删除对应路线的 `artifacts/small` 或 `artifacts/full`，不会删除：
+
+- `data/classifiers/`
+- `data/wiki/`
+- `data/paloma/`
+- `data/commoncrawl/cache/`
+
+#### 6. 查看完整帮助
+
+```bash
+make -f Makefile.small help
+make -f Makefile.full help
+```
 
 这份文档按这个顺序组织：
 
@@ -28,9 +134,9 @@
 
 | 产物 | 路径 | 作用 |
 |---|---|---|
-| 测试质量分类器 A | `out/models/quality.bin` | 作业里的测试/辅助分类器，不参与最终主 pipeline |
-| Leaderboard 质量分类器 B | `data/leaderboard/classifier/quality.bin` | Step 4 实际使用的分类器 |
-| 训练用 token 数据 | `data/tokens.bin` | 最终语言模型训练输入 |
+| 测试质量分类器 A | `artifacts/<route>/out/models/quality.bin` | 作业里的测试/辅助分类器，不参与最终主 pipeline |
+| Leaderboard 质量分类器 B | `artifacts/<route>/data/leaderboard/classifier/quality.bin` | Step 4 实际使用的分类器 |
+| 训练用 token 数据 | `artifacts/<route>/data/tokens.bin` | 最终语言模型训练输入 |
 
 ### 1.2 仓库结构与作用
 
@@ -50,18 +156,15 @@ cs336-a4/
 │   ├── configs/experiment/           # 训练配置
 │   └── scripts/train.py              # 语言模型训练入口
 ├── tests/                            # 单元测试与夹具
-├── data/                             # 本地数据与中间产物（不提交）
+├── data/                             # 共享输入、下载缓存与外部资源（不提交）
 │   ├── classifiers/                  # 外部下载的 fastText 模型
-│   ├── wiki/                         # Wikipedia 相关原始数据与 A 的训练集
-│   ├── CC/                           # WARC（给测试分类器 A 做负例）
-│   ├── raw/                          # WET 原始输入（给主 pipeline）
-│   ├── 01-english/                   # Step 1 输出
-│   ├── 02-heuristics/                # Step 2 输出
-│   ├── 03-deduped/                   # Step 3 输出
-│   ├── 04-classified/                # Step 4 输出
+│   ├── wiki/                         # Wikipedia 标题与 URL 列表
+│   ├── commoncrawl/                  # CC 路径清单与下载缓存
 │   ├── paloma/                       # Paloma validation.bin
-│   └── leaderboard/classifier/       # 分类器 B 的训练数据与模型
-├── out/models/                       # 测试分类器 A 的模型输出
+│   └── .shared-stamps/               # 共享准备阶段的 stamp
+├── artifacts/                        # make 路线的隔离产物根目录
+│   ├── small/                        # 小样本路线全部中间结果、模型与 stamp
+│   └── full/                         # 全量路线全部中间结果、模型与 stamp
 └── USAGE.md                          # 本文档
 ```
 
@@ -70,10 +173,10 @@ cs336-a4/
 | 类别 | 典型位置 | 作用 |
 |---|---|---|
 | 代码 | `cs336_data/`, `cs336-basics/` | 真正执行过滤、采样、训练 |
-| 原始外部数据 | `data/raw`, `data/CC`, `data/paloma`, `data/wiki` | 从 Common Crawl / Wikipedia / Paloma 下载或构建 |
-| 中间产物 | `data/01-english` ~ `data/04-classified` | 主 pipeline 每一步的输出 |
-| 模型文件 | `data/classifiers/*.bin`, `out/models/quality.bin`, `data/leaderboard/classifier/quality.bin` | 外部分类器或本地训练出的 fastText 模型 |
-| 最终训练输入 | `data/tokens.bin` | 给语言模型训练脚本使用的 tokenized 数据 |
+| 共享输入与缓存 | `data/classifiers/`, `data/wiki/`, `data/paloma/`, `data/commoncrawl/cache/` | 两条路线都能安全复用的外部资源 |
+| 路线中间产物 | `artifacts/<route>/data/01-english` ~ `artifacts/<route>/data/04-classified` | 某条路线自己的 Step 1-4 输出 |
+| 路线模型文件 | `artifacts/<route>/out/models/quality.bin`, `artifacts/<route>/data/leaderboard/classifier/quality.bin` | 某条路线训练出的 fastText 模型 |
+| 最终训练输入 | `artifacts/<route>/data/tokens.bin` | 给语言模型训练脚本使用的 tokenized 数据 |
 
 ### 1.4 人类和 AI 都该遵守的执行约定
 
@@ -81,17 +184,19 @@ cs336-a4/
 
 1. 默认所有命令都在仓库根目录运行，只有最终 LLM 训练时才显式 `cd cs336-basics`。
 2. “小样本跑通”与“全量复现”是两条路线；不要把小样本中间结果误当成全量结果。
-3. `data/`、`out/models/`、下载的 `.bin/.gz` 都是本地产物，不应提交到 Git。
-4. 如果目标只是“做到 `data/tokens.bin` 为止”，执行到 Step 5 就停止，不要继续跑 LLM 训练。
-5. 重新开始全量时，可以复用环境、外部模型、Wikipedia URL 列表和 Paloma `.bin`，但应重做基于 Common Crawl 的中间结果。
+3. `data/`、`out/models/`、`artifacts/`、下载的 `.bin/.gz` 都是本地产物，不应提交到 Git。
+4. 如果目标只是“做到 `tokens.bin` 为止”，执行到 Step 5 就停止，不要继续跑 LLM 训练。
+5. `make` 路线下，`data/` 只放共享输入和下载缓存；`artifacts/small` 与 `artifacts/full` 各自保存自己的中间结果和模型。
 6. 本文统一使用仓库内相对路径，如 `data/...`，不再额外介绍集群专用路径。
 7. 每完成一个小节，先检查该节列出的“关键产物”是否已经生成，再进入下一节。
+8. 如果你不想手动逐条敲命令，可以直接使用 `Makefile.small` 或 `Makefile.full`；下面的 shell 命令更多是给排障和分步执行用的。
+9. 这两个 `Makefile` 不再共用中间产物目录；它们只共享 `data/` 下的外部资源和 Common Crawl 下载缓存。
 
 ---
 
 ## 2. 全量所需硬件配置
 
-如果你的目标是“做到 `data/tokens.bin` 为止，不做最后语言模型训练”，那么：
+如果你的目标是“做到 `tokens.bin` 为止，不做最后语言模型训练”，那么：
 
 - **GPU 不是刚需**
 - **CPU、内存、磁盘才是刚需**
@@ -159,7 +264,7 @@ cs336-a4/
 - 推荐 `2 x 40GB` 或更大显存的 GPU
 - `2 x 24GB` 不是完全不能试，但通常需要你自己改 batch size 或训练参数
 
-如果你只做到 `data/tokens.bin`，就不需要专门配 GPU。
+如果你只做到 `tokens.bin`，就不需要专门配 GPU。
 
 ### 2.4 如果只考虑训练环节，硬件要求会低很多
 
@@ -283,10 +388,24 @@ ln -sf ../paloma/tokenized_paloma_c4_100_domains_validation.bin \
 
 - 跑通两个 fastText 质量分类器
 - 跑通 Leaderboard Step 1 到 Step 5
-- 生成一个小的 `data/tokens.bin`
+- 生成一个小的 `artifacts/small/data/tokens.bin`
 - 不做最终语言模型训练
 
 建议磁盘预留：`5G` 到 `10G`
+
+如果你只是想最快跑通整条小样本路线，直接执行：
+
+```bash
+make -f Makefile.small all
+```
+
+执行时会依次打印 `common-prep`、`download-cc`、`quality-a`、`pipeline-1-3`、`quality-b`、`pipeline-4-5` 的实际用时。
+
+如果想分步执行或单独重跑某一段：
+
+```bash
+make -f Makefile.small help
+```
 
 ### 4.2 下载少量 Common Crawl 样本
 
@@ -497,6 +616,40 @@ uv run python cs336_data/leaderboard/05-tokenize.py \
 - **不依赖**先跑“小样本跑通”（§ 4）
 - 如果你想直接从零做全量，可以直接从这里开始
 
+如果你想最快按默认参数跑完整条全量路线，直接执行：
+
+```bash
+make -f Makefile.full all
+```
+
+执行时会打印每个阶段的实际用时，以及整条全量路线的总耗时。
+
+默认参数可以按需覆盖，例如：
+
+```bash
+make -f Makefile.full all FULL_WET_FILES=100 FULL_TRAIN_EXAMPLES=5000 FULL_VALID_EXAMPLES=200
+```
+
+如果想查看完整 target 列表：
+
+```bash
+make -f Makefile.full help
+```
+
+`Makefile.full` 现在会在参数匹配时自动复用已有产物，避免不必要的重复计算：
+
+- `common-prep` 会复用 `data/classifiers/`、`data/paloma/`、`data/wiki/` 下的共享资源
+- `download-cc` 会复用 `data/commoncrawl/cache/` 里已经下载过的 WARC / WET，然后只在 `artifacts/full/data/CC` 和 `artifacts/full/data/raw` 里重建软链
+- `quality-a` 只会在 `artifacts/full/data/wiki/` 和 `artifacts/full/out/models/` 已匹配当前参数时复用
+- `pipeline-1-3` 只会在 `artifacts/full/data/03-deduped/meta.json` 里的 `total_files` 等于 `FULL_WET_FILES` 时复用
+- `quality-b` 只会在 `artifacts/full/data/leaderboard/classifier/` 的样本数与当前参数一致时复用
+- `pipeline-4-5` 只会在 `artifacts/full/data/04-classified` 文件数与 `FULL_WET_FILES` 一致，且 `artifacts/full/data/tokens.bin` 已存在时复用
+
+这也意味着：
+
+- `artifacts/small` 里的中间结果不会被 `Makefile.full` 误复用
+- 但如果你显式把 `FULL_*` 参数改成与当前 `artifacts/full` 一致，`Makefile.full` 会直接跳过这些阶段
+
 ### 5.2 下载全量所需原始数据
 
 #### 下载 1 个 WARC 供测试分类器 A 使用
@@ -675,6 +828,9 @@ uv run python cs336_data/leaderboard/05-tokenize.py \
 
 ## 6. 最终产物速查
 
+下面这张表列的是“手动逐条执行 shell 命令”时的标准路径。  
+如果你走 `Makefile.small` / `Makefile.full`，把前缀替换成 `artifacts/small/` 或 `artifacts/full/` 即可。
+
 | 产物 | 说明 |
 |---|---|
 | `out/models/quality.bin` | 测试质量分类器 A |
@@ -729,7 +885,8 @@ bash test_and_make_submission.sh
 ## 9. 如果你先做过小样本，可复用什么
 
 这一节只是给“先跑过小样本、现在想升级到全量”的读者看的。  
-它不是全量流程的前置条件。
+它不是全量流程的前置条件。  
+如果你使用 `Makefile.small` / `Makefile.full`，那么 `artifacts/small` 与 `artifacts/full` 本来就是隔离的；全量路线只会复用下面这些共享输入和下载缓存。
 
 | 产物 | 全量时能否直接复用 | 说明 |
 |---|---|---|
@@ -740,9 +897,8 @@ bash test_and_make_submission.sh
 | `data/wiki/enwiki-20240420-extracted_urls.txt.gz` | 可以 | 只是 Wikipedia URL 列表 |
 | `data/paloma/tokenized_paloma_c4_100_domains_validation.bin` | 可以 | Leaderboard 分类器正例来源，可直接复用 |
 | `data/leaderboard/tokenized_paloma_c4_100_domains_validation.bin` | 可以 | 只是兼容软链，可直接复用 |
-| `out/models/quality.bin` | 可以，但通常没必要 | 这是测试用质量分类器 A，不参与最终主 pipeline |
-| `data/CC/example.warc.gz` | 可以，但只够测试分类器 A | 这 1 个 WARC 不代表全量数据 |
-| `data/raw/*.warc.wet.gz`（小样本 WET） | 不可以 | 全量需要重新下载更多 WET |
-| `data/01-english`、`data/02-heuristics`、`data/03-deduped`、`data/04-classified` | 不可以 | 这些都是对小样本 CC 的中间结果，全量必须重跑 |
-| `data/leaderboard/classifier/quality.bin`（小样本训练） | 能临时用，但正式全量建议重训 | 技术上可用于 Step 4，但推荐用更大的 Step 3 输出重新训练 |
-| `data/tokens.bin`（小样本） | 不可以 | 全量必须重新 tokenization |
+| `data/commoncrawl/cache/CC/example.warc.gz` | 可以，但只够测试分类器 A | 这 1 个 WARC 只是共享下载缓存 |
+| `data/commoncrawl/cache/raw/*.warc.wet.gz`（小样本已下载部分） | 可以部分复用 | `Makefile.full` 会优先复用已缓存的 WET，再继续补下载 |
+| `artifacts/small/data/01-english`、`artifacts/small/data/02-heuristics`、`artifacts/small/data/03-deduped`、`artifacts/small/data/04-classified` | 不会复用 | 两条路线物理隔离，full 不会读取 small 的中间结果 |
+| `artifacts/small/data/leaderboard/classifier/quality.bin` | 不会复用 | full 会只看 `artifacts/full/...` 下自己的分类器产物 |
+| `artifacts/small/data/tokens.bin` | 不会复用 | full 会重新生成自己的 `artifacts/full/data/tokens.bin` |

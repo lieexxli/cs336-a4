@@ -1,6 +1,7 @@
+import os
 import fasttext
 
-QUALITY_MODEL_PATH = "out/models/quality.bin"
+QUALITY_MODEL_PATH = os.environ.get("CS336_QUALITY_MODEL_PATH", "out/models/quality.bin")
 POSITIVE_CONFIDENCE_THRESHOLD = 0.85
 
 quality_model = fasttext.load_model(QUALITY_MODEL_PATH)
