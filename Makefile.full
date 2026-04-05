@@ -94,7 +94,7 @@ reset:
 $(FULL_WET_SELECTION): $(WET_PATHS) make/print_gzip_lines.py | $(ROUTE_STAMP_DIR)/dirs.done
 	$(UV_RUN) python make/print_gzip_lines.py $< $(FULL_WET_FILES) > $@
 
-$(FULL_CC_STAMP): $(WARC_PATHS) $(FULL_WET_SELECTION) make/fetch_cached.sh | $(ROUTE_STAMP_DIR)/dirs.done
+$(FULL_CC_STAMP): $(WARC_PATHS) $(FULL_WET_SELECTION) make/fetch_cached.sh make/link_relative.py | $(ROUTE_STAMP_DIR)/dirs.done
 	rm -rf $(ROUTE_CC_DIR) $(ROUTE_RAW_DIR)
 	mkdir -p $(ROUTE_CC_DIR) $(ROUTE_RAW_DIR) $(CC_CACHE_DIR) $(WET_CACHE_DIR)
 	first_warc_path="$$( $(UV_RUN) python make/print_gzip_lines.py $(WARC_PATHS) 1 )"
@@ -102,7 +102,9 @@ $(FULL_CC_STAMP): $(WARC_PATHS) $(FULL_WET_SELECTION) make/fetch_cached.sh | $(R
 	  "https://data.commoncrawl.org/$${first_warc_path}" \
 	  $(CC_CACHE_DIR)/example.warc.gz \
 	  gzip
-	ln -sf $(abspath $(CC_CACHE_DIR))/example.warc.gz $(ROUTE_CC_DIR)/example.warc.gz
+	$(UV_RUN) python make/link_relative.py \
+	  $(CC_CACHE_DIR)/example.warc.gz \
+	  $(ROUTE_CC_DIR)/example.warc.gz
 	while read -r wet_path; do
 	  wet_name="$$(basename "$$wet_path")"
 	  cache_file="$(WET_CACHE_DIR)/$${wet_name}"
@@ -111,7 +113,7 @@ $(FULL_CC_STAMP): $(WARC_PATHS) $(FULL_WET_SELECTION) make/fetch_cached.sh | $(R
 	    "https://data.commoncrawl.org/$${wet_path}" \
 	    "$$cache_file" \
 	    gzip
-	  ln -sf $(abspath $(WET_CACHE_DIR))/$${wet_name} "$$route_file"
+	  $(UV_RUN) python make/link_relative.py "$$cache_file" "$$route_file"
 	done < $(FULL_WET_SELECTION)
 	touch $@
 
@@ -209,7 +211,7 @@ $(FULL_QUALITY_B_STAMP): $(FULL_STEP3_STAMP) $(ROUTE_PALOMA_LINK) \
 	fi
 	rm -rf $(ROUTE_LEADERBOARD_CLASSIFIER_DIR)
 	mkdir -p $(ROUTE_LEADERBOARD_CLASSIFIER_DIR)
-	ln -sf $(abspath $(PALOMA_BIN)) $(ROUTE_PALOMA_LINK)
+	$(UV_RUN) python make/link_relative.py $(PALOMA_BIN) $(ROUTE_PALOMA_LINK)
 	$(UV_RUN) python cs336_data/leaderboard/classifier/01-val_to_text.py \
 	  --leaderboard-dir $(ROUTE_LEADERBOARD_DIR) \
 	  --classifier-dir $(ROUTE_LEADERBOARD_CLASSIFIER_DIR)

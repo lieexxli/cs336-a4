@@ -121,8 +121,8 @@ $(WIKI_URLS): $(WIKI_TITLES) | $(SHARED_STAMP_DIR)/dirs.done
 $(PALOMA_BIN): make/build_paloma_bin.py | $(SHARED_STAMP_DIR)/setup.done $(SHARED_STAMP_DIR)/dirs.done
 	$(UV_RUN) python make/build_paloma_bin.py
 
-$(ROUTE_PALOMA_LINK): $(PALOMA_BIN) | $(ROUTE_STAMP_DIR)/dirs.done
-	ln -sf $(abspath $(PALOMA_BIN)) $@
+$(ROUTE_PALOMA_LINK): $(PALOMA_BIN) make/link_relative.py | $(ROUTE_STAMP_DIR)/dirs.done
+	$(UV_RUN) python make/link_relative.py $(PALOMA_BIN) $@
 
 $(WARC_PATHS): make/fetch_cached.sh | $(SHARED_STAMP_DIR)/dirs.done
 	bash make/fetch_cached.sh \
