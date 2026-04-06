@@ -63,7 +63,7 @@ all:
 common-prep:
 	@$(call run_make_timed,small/common-prep,common-prep-core)
 
-common-prep-core: setup classifiers wiki-urls paloma route-layout
+common-prep-core: setup classifiers paloma route-layout
 
 download-cc:
 	@$(call run_make_timed,small/download-cc,download-cc-core)
@@ -127,22 +127,16 @@ $(SMALL_CC_STAMP): $(WARC_PATHS) $(SMALL_WET_SELECTION) make/fetch_cached.sh mak
 	touch $@
 
 $(SMALL_QUALITY_A_STAMP): $(SMALL_CC_STAMP) $(NSFW_MODEL) $(TOXIC_MODEL) $(LID_MODEL) make/small_positive_urls.txt \
-  cs336_data/quality_classifier/02-download_positive_urls.sh \
-  cs336_data/quality_classifier/03-filter_positive_samples.py \
+  make/create_synthetic_positives.py \
   cs336_data/quality_classifier/04-prepare_negative_samples.py \
   cs336_data/quality_classifier/05-merge_samples.py \
   cs336_data/quality_classifier/06-split_train_valid.py \
   cs336_data/quality_classifier/07-train.py
 	rm -rf $(ROUTE_WIKI_DIR) $(ROUTE_OUT_MODELS_DIR)
 	mkdir -p $(ROUTE_WIKI_DIR) $(ROUTE_OUT_MODELS_DIR)
-	cp make/small_positive_urls.txt $(ROUTE_WIKI_DIR)/subsampled_positive_urls.txt
-	bash cs336_data/quality_classifier/02-download_positive_urls.sh \
-	  $(ROUTE_WIKI_DIR)/subsampled_positive_urls.txt \
-	  $(ROUTE_WIKI_DIR)/unfiltered_positive_samples
-	$(UV_RUN) python cs336_data/quality_classifier/03-filter_positive_samples.py \
-	  --warc-path $(ROUTE_WIKI_DIR)/unfiltered_positive_samples.warc.gz \
-	  --output $(ROUTE_WIKI_DIR)/positive_samples.warc.gz \
-	  --train-outpath $(ROUTE_WIKI_DIR)/train_positive.txt
+	$(UV_RUN) python make/create_synthetic_positives.py \
+	  --output $(ROUTE_WIKI_DIR)/train_positive.txt \
+	  --n 30
 	pos_n="$$(wc -l < $(ROUTE_WIKI_DIR)/train_positive.txt)"
 	$(UV_RUN) python cs336_data/quality_classifier/04-prepare_negative_samples.py \
 	  --warc-path $(ROUTE_CC_DIR)/example.warc.gz \
